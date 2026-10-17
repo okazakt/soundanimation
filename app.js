@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.1';
+  const VERSION = '2026.10.17.3';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -22,30 +22,44 @@
     return { color: palette[a].map((v, c) => Math.round(lerp(v, palette[a + 1][c], p - a))),
       phase: i * 2.3999632297, baseline: 0, intensity: 0 };
   });
-  const field = document.createElement('canvas');
-  const fieldContext = field.getContext('2d');
-  let pixels, pixelBands, pixelGains;
-  // Coordinate hashing keeps the assignment fixed, including across resizes.
+  // Sparse, stable emitters with overlapping halos instead of pixel noise.
+  let lights = [];
+  const glowColors = ['255,153,76', '255,210,120', '255,239,210',
+    '130,210,255', '110,145,255', '201,132,255', '255,145,186'];
+  const glows = glowColors.map(color => {
+    const sprite = document.createElement('canvas');
+    sprite.width = sprite.height = 128;
+    const g = sprite.getContext('2d');
+    const halo = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    halo.addColorStop(0, 'rgba(255,250,239,1)');
+    halo.addColorStop(.025, `rgba(${color},1)`);
+    halo.addColorStop(.09, `rgba(${color},.65)`);
+    halo.addColorStop(.24, `rgba(${color},.22)`);
+    halo.addColorStop(.55, `rgba(${color},.055)`);
+    halo.addColorStop(1, `rgba(${color},0)`);
+    g.fillStyle = halo; g.fillRect(0, 0, 128, 128);
+    return sprite;
+  });
   function hash(x, y, salt) {
     let v = Math.imul(x ^ salt, 374761393) ^ Math.imul(y, 668265263);
     v = Math.imul(v ^ (v >>> 13), 1274126177);
     return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
   }
   function prepareField() {
-    field.width = canvas.width; field.height = canvas.height;
-    pixels = fieldContext.createImageData(field.width, field.height);
-    const count = field.width * field.height;
-    pixelBands = new Uint16Array(count); pixelGains = new Uint8Array(count);
-    for (let y = 0, i = 0; y < field.height; y++) {
-      for (let x = 0; x < field.width; x++, i++) {
-        const band = Math.floor(hash(x, y, 19820119) * N);
-        pixelBands[i] = band;
-        // Every pixel can light up. A wide gain range gives bright, sparse peaks.
-        pixelGains[i] = Math.round(3 + 252 * Math.pow(hash(x, y, 7331), 18));
-        const color = channels[band].color;
-        pixels.data[i * 4] = color[0];
-        pixels.data[i * 4 + 1] = color[1];
-        pixels.data[i * 4 + 2] = color[2];
+    lights = [];
+    // CSS coordinates keep density and halo size consistent on Retina screens.
+    // Include offscreen sources so their glow can spill across screen edges.
+    for (let y = -64; y < height + 64; y++) {
+      for (let x = -64; x < width + 64; x++) {
+        if (hash(x, y, 7331) > .0012) continue;
+        lights.push({ x, y, band: Math.floor(hash(x, y, 19820119) * N),
+          color: Math.floor(hash(x, y, 9187) * glows.length),
+          gain: .15 + .85 * Math.pow(hash(x, y, 451), 1.4),
+          // Stable random response per light avoids frame-to-frame static.
+          threshold: .08 + .34 * hash(x, y, 1723),
+          sensitivity: .65 + 1.15 * hash(x, y, 6197),
+          responseCurve: 1.2 + 1.4 * hash(x, y, 2851),
+          radius: 14 + 28 * hash(x, y, 831) });
       }
     }
   }
@@ -187,12 +201,19 @@
     stops.forEach((stop, i) => sky.addColorStop(stop, `rgb(${dusk[i].map((v, c) => Math.round(lerp(v, midnight[i][c], k)))})`));
     ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
     ctx.globalCompositeOperation = 'lighter';
-    for (let i = 0; i < pixelBands.length; i++) {
-      pixels.data[i * 4 + 3] = channels[pixelBands[i]].intensity * pixelGains[i];
+    for (const light of lights) {
+      const intensity = channels[light.band].intensity;
+      // Each light has its own onset, sensitivity and brightness curve.
+      const response = clamp((intensity - light.threshold) /
+        (1 - light.threshold) * light.sensitivity, 0, 1);
+      const strength = Math.pow(response, light.responseCurve);
+      if (strength < .006) continue;
+      const radius = light.radius * (.65 + 1.5 * Math.sqrt(strength));
+      ctx.globalAlpha = strength * light.gain;
+      ctx.drawImage(glows[light.color], light.x - radius, light.y - radius,
+        radius * 2, radius * 2);
     }
-    fieldContext.putImageData(pixels, 0, 0);
-    // The field contains one sample per backing-store pixel, including the edges.
-    ctx.drawImage(field, 0, 0, width, height);
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -224,3 +245,4 @@
     });
   }
 })();
+
