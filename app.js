@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.9';
+  const VERSION = '2026.10.17.10';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -89,8 +89,10 @@
           sensitivity: (.65 + 1.15 * hash(x, y, 6197)) * tuning.sensitivity,
           // Most fade gently; a smaller group retains a much longer afterglow.
           releaseTime: hash(x, y, 4831) < .22 ?
-            4 + 3 * hash(x, y, 4832) : 1.8 + .8 * hash(x, y, 4832),
-          afterglow: 0,
+            3 + 1.5 * hash(x, y, 4832) : 1.8 + .8 * hash(x, y, 4832),
+          afterglow: 0, litAge: 0, fading: false, rest: 0,
+          maxLitTime: 5 + 4 * hash(x, y, 4833),
+          restTime: .8 + 1.2 * hash(x, y, 4834),
           responseCurve: 1.2 + 1.4 * hash(x, y, 2851),
           radius: (14 + 28 * hash(x, y, 831)) * tuning.size });
       }
@@ -107,7 +109,7 @@
   function resetSignals() {
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
-    lights.forEach(light => { light.intensity = 0; light.afterglow = 0; light.meteorReady = true; light.meteorRest = 0; });
+    lights.forEach(light => { light.intensity = 0; light.afterglow = 0; light.litAge = 0; light.fading = false; light.rest = 0; light.meteorReady = true; light.meteorRest = 0; });
   }
   function recordSignals(dt) {
     signalTime += dt;
@@ -297,6 +299,22 @@
     environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
   }
   function updateLight(light, target, dt) {
+    // Bound each visible episode, even when a sustained tone keeps matching.
+    if (light.rest > 0) {
+      light.rest = Math.max(0, light.rest - dt);
+      return;
+    }
+    if (light.intensity > .02) light.litAge += dt;
+    else if (!light.fading) light.litAge = 0;
+    if (light.litAge >= light.maxLitTime) light.fading = true;
+    if (light.fading) {
+      light.intensity *= Math.exp(-dt / .45);
+      if (light.intensity < .005) {
+        light.intensity = 0; light.afterglow = 0; light.litAge = 0;
+        light.fading = false; light.rest = light.restTime;
+      }
+      return;
+    }
     // Only a strong coincidence charges the extra persistence; quiet input
     // cannot repeatedly hold a star on. The stored charge fades over time.
     light.afterglow *= Math.exp(-dt / 8);
