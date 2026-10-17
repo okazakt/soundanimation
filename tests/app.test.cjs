@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.15'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.16'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -156,6 +156,7 @@ test('flocks vary in scale, population and motion, with gathering and dispersing
   const sizes = active[0].particles.map(p => p.size);
   assert.ok(Math.max(...sizes) / Math.min(...sizes) > 4);
   const live = active.filter(g => g.active);
+  const retiring = new Map(live.map(g => [g, g.particles.filter(p => p.alpha > .5)]));
   // Exercise all four disappearance styles on voices that are currently lit.
   live.forEach((g, i) => { g.exitStyle = i % 4; });
   assert.equal(new Set(live.map(g => g.exitStyle)).size, 4);
@@ -166,9 +167,9 @@ test('flocks vary in scale, population and motion, with gathering and dispersing
   assert.ok(live.every(g => g.presence < .02));
   for (const g of live) {
     if (g.exitStyle % 2 === 0) {
-      assert.ok(g.particles.every(p => Math.hypot(p.x - 195, p.y - 370) < 8), 'gathering exits reach the centre');
+      assert.ok(retiring.get(g).every(p => Math.hypot(p.x - 195, p.y - 370) < 8), 'gathering exits reach the centre');
     } else {
-      assert.ok(g.particles.some(p => p.x < 0 || p.x > 390 || p.y < 0 || p.y > 740), 'dispersal exits travel offscreen');
+      assert.ok(retiring.get(g).some(p => p.x < 0 || p.x > 390 || p.y < 0 || p.y > 740), 'dispersal exits travel offscreen');
     }
   }
   volume = 160;
@@ -218,6 +219,26 @@ test('independent phrase lifetimes vary flock counts, symmetry and colour withou
   const voices = f.inspect().flocks;
   assert.ok(new Set(voices.map(g => g.colorShift.toFixed(2))).size > 3);
   assert.ok(new Set(voices.map(g => g.speedScale.toFixed(2))).size > 3);
+  f.nodes['#stop'].click();
+});
+
+test('each particle carries its velocity through disturbances with bounded acceleration', async () => {
+  const f = fixture(async stream => stream, { spectrum: data => data.fill(160) });
+  await f.nodes['#start'].click();
+  for (let i = 0; i < 45; i++) await f.tick();
+  const g = f.inspect().flocks.find(g => g.active && g.presence > .9);
+  const p = g.particles[0];
+  p.x += 40; p.vx = 80; p.vy = -35;
+  const before = { x: p.x, y: p.y, vx: p.vx, vy: p.vy };
+  await f.tick();
+  const maxDelta = 350 / 60;
+  assert.ok(Math.hypot(p.vx - before.vx, p.vy - before.vy) <= maxDelta + 1e-6);
+  assert.ok(Math.abs((p.x - before.x) - before.vx / 60) < .15, 'position is integrated from its own velocity');
+  assert.ok(new Set(g.particles.slice(0, 40).map(p => Math.hypot(p.vx, p.vy).toFixed(1))).size > 20, 'individuals have distinct speeds');
+  const neighbour = g.particles[1];
+  const d0 = Math.hypot(p.x - neighbour.x, p.y - neighbour.y);
+  for (let i = 0; i < 30; i++) await f.tick();
+  assert.ok(Math.abs(Math.hypot(p.x - neighbour.x, p.y - neighbour.y) - d0) > 1, 'pair distances evolve rather than rotating rigidly');
   f.nodes['#stop'].click();
 });
 

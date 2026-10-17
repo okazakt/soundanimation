@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.15';
+  const VERSION = '2026.10.17.16';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -499,7 +499,10 @@
       if (target > .035 && !f.active) {
         if (f.presence < .001) {
           f.trail = [];
-          f.particles.forEach(p => { p.x = f.x; p.y = f.y; p.vx = p.vy = p.alpha = 0; });
+          f.particles.forEach(p => { const r = Math.min(width, height) * .12 * p.distance;
+            p.x = f.x + Math.cos(p.angle) * r; p.y = f.y + Math.sin(p.angle) * r;
+            p.vx = Math.cos(p.angle + Math.PI / 2) * 35;
+            p.vy = Math.sin(p.angle + Math.PI / 2) * 35; p.alpha = 0; });
         }
         f.episode++;
         f.exitStyle = (f.id + f.episode - 1) % 4;
@@ -509,7 +512,7 @@
       f.quiet = target > .035 ? 0 : f.quiet + dt;
       f.collapse = lerp(clamp((f.quiet - .18) / 1.15, 0, 1), f.collapse, Math.exp(-dt / .18));
       if (f.quiet > .18 && !f.exiting && f.presence > .05) {
-        f.exiting = true; f.exitX = f.x; f.exitY = f.y;
+        f.exiting = true; f.exitX = f.x; f.exitY = f.y; f.exitPopulation = f.population;
         f.particles.forEach(p => { p.exitX = p.x; p.exitY = p.y; });
       }
       if (f.active) f.exiting = false;
@@ -526,7 +529,7 @@
       const t = f.phase;
       // Blend between orbit, rolling waves, radial breathing and a broad
       // sweep. Frequency and phrase position choose different shapes per flock.
-      // Both leader paths and particle formations morph; no fixed figure-eight.
+      // The leader steers the moving flow, not individual particle positions.
       const phrase = elapsed / (8 + f.id * .31) + f.id * .83 + backgroundTone * .7;
       const shape = ((Math.floor(phrase) % 5) + 5) % 5;
       const mix = (1 - Math.cos(Math.PI * clamp((phrase % 1 - .55) / .45, 0, 1))) / 2;
@@ -558,61 +561,109 @@
       while (f.trail.length > 2 && f.trail[f.trail.length - 2].time < elapsed - 1.6) f.trail.pop();
       const radius = Math.min(width, height) * (.10 + f.motionLevel * .20) * f.scale *
         (1 + f.motionPulse * .5) * (.8 + .2 * Math.sin(t * .4 + f.id));
-      const count = Math.round(16 + f.level * (64 + 48 * (.5 + .5 * Math.sin(t * .24 + f.id))));
+      const count = f.exiting ? f.exitPopulation : Math.round(16 + f.level * (64 + 48 * (.5 + .5 * Math.sin(t * .24 + f.id))));
       f.population = count;
       const symmetryChoice = Math.floor(hash(f.id, Math.floor(phrase), 8022) * 7);
       const symmetry = symmetryChoice < 4 ? 0 : symmetryChoice - 3;
       if (symmetry !== f.mirrorType && f.mirrorAlpha < .03) f.mirrorType = symmetry;
       f.mirrorAlpha = lerp(symmetry === f.mirrorType && symmetry ? 1 : 0, f.mirrorAlpha, Math.exp(-dt / .65));
       f.colorShift = lerp(Math.sin(t * .23 + f.id) * .13 + backgroundTone * .1, f.colorShift, Math.exp(-dt / 1.2));
+      // Local neighbour samples are frozen for the frame, so the result does
+      // not depend on particle iteration order. A grid bounds mobile CPU cost.
+      const cellSize = Math.max(18, Math.min(width, height) * .085);
+      const cells = new Map();
+      const members = f.particles.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, alpha: p.alpha }));
+      members.forEach((p, j) => {
+        if (j >= count && p.alpha < .05) return;
+        const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)}`;
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key).push(j);
+      });
       f.particles.forEach((p, j) => {
         p.strength = lerp(clamp(energies[p.band] / Math.max(.06, environment), 0, 1), p.strength, Math.exp(-dt / .12));
         p.alpha = lerp(j < count ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
-        const angle = p.angle + t * (f.id % 2 ? -1 : 1);
-        const formation = kind => {
-          if (kind === 0) return [Math.cos(angle) * p.distance, Math.sin(angle) * p.distance]; // filled disc
-          if (kind === 1) return [Math.cos(angle) * (.82 + p.distance * .18), Math.sin(angle) * (.82 + p.distance * .18)]; // annulus
-          if (kind === 2) return [0, 0]; // sampled from the leader's actual trail below
-          if (kind === 3) {
-            const spiral = t * (f.id % 2 ? -1 : 1) + p.distance * Math.PI * 4;
-            return [Math.cos(spiral) * p.distance, Math.sin(spiral) * p.distance];
+        if (j >= count && p.alpha < .005 && !f.exiting) return;
+        let alignX = 0, alignY = 0, repelX = 0, repelY = 0, neighbours = 0;
+        const cellX = Math.floor(p.x / cellSize), cellY = Math.floor(p.y / cellSize);
+        for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) {
+          for (const k of cells.get(`${cellX + gx},${cellY + gy}`) || []) {
+            if (k === j) continue;
+            const q = members[k], dx = p.x - q.x, dy = p.y - q.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > cellSize * cellSize || d2 < .01) continue;
+            alignX += q.vx; alignY += q.vy; neighbours++;
+            if (d2 < cellSize * cellSize * .22) {
+              repelX += dx / (d2 + 4); repelY += dy / (d2 + 4);
+            }
           }
-          return [(p.distance * 2 - 1) * 1.2, Math.sin(p.angle + t * .5) * p.distance * .3];
-        };
-        const fa = formation(shape), fb = formation((shape + 1) % 5);
-        const toScreen = point => {
-          const ox = Math.cos(f.heading) * point[0] * radius - Math.sin(f.heading) * point[1] * radius;
-          const oy = Math.sin(f.heading) * point[0] * radius + Math.cos(f.heading) * point[1] * radius;
-          return [f.x + Math.tanh(ox / Math.max(1, radius)) * Math.min(radius, f.x * .9, (width - f.x) * .9),
-            f.y + Math.tanh(oy / Math.max(1, radius)) * Math.min(radius, f.y * .9, (height - f.y) * .9)];
-        };
-        // Place a line on the path already travelled, rather than rotating a
-        // straight bar. Interpolate by time for consistent length at any fps.
-        let line;
-        if (shape === 2 || (shape + 1) % 5 === 2) {
-          const trailTime = elapsed - j / Math.max(1, count - 1) * 1.4;
-          let k = 0;
-          while (k < f.trail.length - 1 && f.trail[k + 1].time > trailTime) k++;
-          const h0 = f.trail[k], h1 = f.trail[Math.min(k + 1, f.trail.length - 1)];
-          const hk = h0.time === h1.time ? 0 : clamp((h0.time - trailTime) / (h0.time - h1.time), 0, 1);
-          line = [lerp(h0.x, h1.x, hk), lerp(h0.y, h1.y, hk)];
         }
-        const sa = shape === 2 ? line : toScreen(fa);
-        const sb = (shape + 1) % 5 === 2 ? line : toScreen(fb);
-        let x = lerp(sa[0], sb[0], mix), y = lerp(sa[1], sb[1], mix);
-        if (f.exiting) {
-          const c = f.collapse;
-          const outward = f.exitStyle % 2 === 1;
-          const cx = outward ? f.exitX : width / 2, cy = outward ? f.exitY : height / 2;
-          const dx = p.exitX - cx, dy = p.exitY - cy;
-          const spin = f.exitStyle >= 2 ? c * Math.PI * 2 * (f.id % 2 ? -1 : 1) : 0;
-          const reach = outward ? 1 + c * 4 : 1 - c;
-          const burst = outward ? c * Math.hypot(width, height) * .65 : 0;
-          x = cx + (dx * Math.cos(spin) - dy * Math.sin(spin)) * reach + Math.cos(p.angle + spin) * burst;
-          y = cy + (dx * Math.sin(spin) + dy * Math.cos(spin)) * reach + Math.sin(p.angle + spin) * burst;
+        if (neighbours) { alignX /= neighbours; alignY /= neighbours; }
+        const speed = (50 + f.motionLevel * 65 + f.motionPulse * 18) * f.speedScale *
+          (.75 + p.tint * .5) * Math.min(width, height) / 390;
+        const rotation = f.id % 2 ? -1 : 1;
+        // These are velocity fields evaluated at the particle's CURRENT
+        // position. No particle is assigned an angle or a place on a shape.
+        const field = kind => {
+          const dx = p.x - f.x, dy = p.y - f.y, r = Math.max(1, Math.hypot(dx, dy));
+          const nx = dx / r, ny = dy / r;
+          let radial, tangent;
+          if (kind === 0 || kind === 1 || kind === 3) {
+            const preferred = radius * (kind === 1 ? .85 + p.tint * .13 : .12 + p.distance * .85);
+            radial = (preferred - r) * 1.8;
+            tangent = speed * rotation * (kind === 0 ? .6 + p.distance * .4 : 1);
+            if (kind === 3) radial += Math.sin(t * .65 + p.tint * 1.4) * speed * .65;
+            return [f.vx - ny * tangent + nx * radial, f.vy + nx * tangent + ny * radial];
+          }
+          if (kind === 2) {
+            let closest = Infinity, fx = f.x, fy = f.y, ux = Math.cos(f.heading), uy = Math.sin(f.heading);
+            for (let k = 0; k < f.trail.length - 1; k++) {
+              const a = f.trail[k + 1], b = f.trail[k];
+              const sx = b.x - a.x, sy = b.y - a.y, length2 = sx * sx + sy * sy;
+              const u = length2 > .01 ? clamp(((p.x - a.x) * sx + (p.y - a.y) * sy) / length2, 0, 1) : 0;
+              const x = a.x + sx * u, y = a.y + sy * u, d2 = (x - p.x) ** 2 + (y - p.y) ** 2;
+              if (d2 < closest && length2 > .01) {
+                closest = d2; fx = x; fy = y; ux = sx / Math.sqrt(length2); uy = sy / Math.sqrt(length2);
+              }
+            }
+            return [ux * speed + (fx - p.x) * 2.2, uy * speed + (fy - p.y) * 2.2];
+          }
+          // A moving sheet: common forward flow plus a transverse wave, with
+          // cohesion keeping it a flock while each individual drifts through it.
+          const ux = Math.cos(f.heading), uy = Math.sin(f.heading);
+          const cross = dx * -uy + dy * ux;
+          const wave = Math.sin((dx * ux + dy * uy) / Math.max(20, radius) * 2 + t * .7) * speed * .4;
+          return [f.vx + ux * speed - dx * .65 - uy * (wave - cross * 1.4),
+            f.vy + uy * speed - dy * .65 + ux * (wave - cross * 1.4)];
+        };
+        // Substeps bound acceleration and keep the simulation stable on slow
+        // frames. Neighbour alignment acts gently alongside the shared flow.
+        const a = field(shape), b = field((shape + 1) % 5);
+        let flowX = lerp(a[0], b[0], mix), flowY = lerp(a[1], b[1], mix);
+        if (neighbours) { flowX = lerp(flowX, alignX, .16); flowY = lerp(flowY, alignY, .16); }
+        flowX += repelX * 70; flowY += repelY * 70;
+        const steps = Math.max(1, Math.ceil(dt * 120)), h = dt / steps;
+        for (let step = 0; step < steps; step++) {
+          let vx = flowX, vy = flowY;
+          if (f.exiting) {
+            const outward = f.exitStyle % 2 === 1;
+            const cx = outward ? f.exitX : width / 2, cy = outward ? f.exitY : height / 2;
+            const dx = p.x - cx, dy = p.y - cy, r = Math.max(1, Math.hypot(dx, dy));
+            const spin = f.exitStyle >= 2 ? rotation * 2.8 : 0;
+            const radial = outward ? 170 + r * 1.4 : -r * 5.5;
+            vx = dx / r * radial - dy * spin;
+            vy = dy / r * radial + dx * spin;
+          } else {
+            const margin = Math.min(width, height) * .08;
+            vx += (Math.max(0, margin - p.x) - Math.max(0, p.x - width + margin)) * 5;
+            vy += (Math.max(0, margin - p.y) - Math.max(0, p.y - height + margin)) * 5;
+          }
+          let ax = (vx - p.vx) / (f.exiting ? (f.exitStyle % 2 ? .16 : .1) : .48);
+          let ay = (vy - p.vy) / (f.exiting ? (f.exitStyle % 2 ? .16 : .1) : .48);
+          const limit = f.exiting ? 2600 : 350 * Math.min(width, height) / 390;
+          const factor = Math.min(1, limit / Math.max(1, Math.hypot(ax, ay)));
+          p.vx += ax * factor * h; p.vy += ay * factor * h;
+          p.x += p.vx * h; p.y += p.vy * h;
         }
-        springAxis(p, 'x', 'vx', x, 13, dt);
-        springAxis(p, 'y', 'vy', y, 13, dt);
         const mx = f.mirrorType === 1 || f.mirrorType === 3 ? width - p.x : p.x;
         const my = f.mirrorType === 2 || f.mirrorType === 3 ? height - p.y : p.y;
         springAxis(p, 'mirrorX', 'mvx', mx, 10, dt);
@@ -638,6 +689,11 @@
       const copies = [[p.x, p.y, 1]];
       if (f.mirrorAlpha > .005) copies.push([p.mirrorX, p.mirrorY, f.mirrorAlpha]);
       for (const [x, y, opacity] of copies) {
+        const reflectedX = x === p.x ? 1 : (f.mirrorType === 1 || f.mirrorType === 3 ? -1 : 1);
+        const reflectedY = y === p.y ? 1 : (f.mirrorType === 2 || f.mirrorType === 3 ? -1 : 1);
+        ctx.globalAlpha = p.alpha * opacity * .2;
+        ctx.strokeStyle = `hsl(${hue},85%,70%)`; ctx.lineWidth = Math.min(1.8, radius * .45);
+        ctx.beginPath(); ctx.moveTo(x - p.vx * .1 * reflectedX, y - p.vy * .1 * reflectedY); ctx.lineTo(x, y); ctx.stroke();
         ctx.globalAlpha = p.alpha * opacity * (.25 + p.strength * .4);
         ctx.drawImage(glows[colorIndex][2], x - glow, y - glow, glow * 2, glow * 2);
         ctx.globalAlpha = p.alpha * opacity * (.6 + p.strength * .4);
