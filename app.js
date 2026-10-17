@@ -1,5 +1,7 @@
 'use strict';
 (() => {
+  const VERSION = '2026.10.17.1';
+  document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
   const canvas = document.querySelector('#canvas');

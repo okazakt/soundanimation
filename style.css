@@ -17,3 +17,5 @@ button:disabled { opacity: .3; cursor: default; }
 button:focus-visible { outline: 2px solid #c4dcff; outline-offset: 3px; }
 button:not(:disabled):active { background: #c4dcff30; }
 @media (prefers-reduced-motion: reduce) { #intro, #notice { transition: none; } }
+
+#version { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); margin: 0; color: #c4c9d8; font-size: 11px; letter-spacing: .04em; pointer-events: none; text-shadow: 0 1px 4px #000; }

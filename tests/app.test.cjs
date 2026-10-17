@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v1'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.1'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -154,4 +154,18 @@ test('silence fades continuously for seconds and release is independent of frame
     f.nodes['#stop'].click(); return previous;
   }
   assert.ok(Math.abs(await fade(30) - await fade(120)) <= 1);
+});
+
+test('visible version identifies the running script and matches cached asset URLs', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const version = f.nodes['#version'].textContent;
+  assert.match(version, /^v\d{4}\.\d{2}\.\d{2}\.\d+$/);
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  assert.ok(html.includes('id="version"'));
+  for (const asset of ['app.js', 'style.css']) {
+    assert.ok(html.includes(`./${asset}?v=${version.slice(1)}`));
+    assert.ok(sw.includes(`./${asset}?v=${version.slice(1)}`));
+  }
+  assert.ok(sw.includes(`PREFIX + '${version}'`));
 });
