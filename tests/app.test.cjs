@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.14'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.15'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -111,7 +111,9 @@ test('frequency regions select independent flocks, coloured particles and backgr
     await f.nodes['#start'].click();
     for (let i = 0; i < 90; i++) await f.tick();
     const state = f.inspect();
-    assert.equal(state.flocks.filter(g => g.presence > .5).length, 1);
+    const voices = state.flocks.filter(g => g.presence > .5);
+    assert.ok(voices.length >= 1 && voices.length <= 2);
+    assert.equal(new Set(voices.map(g => g.region)).size, 1);
     const active = state.flocks.find(g => g.presence > .5);
     assert.ok(active.particles.some(p => p.alpha > .5));
     for (const g of state.flocks) for (const p of g.particles) {
@@ -132,14 +134,14 @@ test('bass onset pulses every flock once, sustained sound does not retrigger, si
   volume = 180; await f.tick();
   assert.ok(f.inspect().flocks.every(g => g.pulse === 1));
   for (let i = 0; i < 90; i++) await f.tick();
-  assert.ok(f.inspect().flocks.every(g => g.pulse < .01 && g.presence > .5));
+  assert.ok(f.inspect().flocks.every(g => g.pulse < .01));
   volume = 0;
   for (let i = 0; i < 360; i++) await f.tick();
   assert.ok(f.inspect().flocks.every(g => g.presence < .001));
   assert.ok(f.inspect().backgroundEnergy < .001);
   f.nodes['#stop'].click();
 });
-test('flocks vary in scale and ball size, travel widely, then converge visibly before fading', async () => {
+test('flocks vary in scale, population and motion, with gathering and dispersing exits', async () => {
   let volume = 160;
   const f = fixture(async stream => stream, { spectrum: data => data.fill(volume) });
   await f.nodes['#start'].click();
@@ -149,17 +151,29 @@ test('flocks vary in scale and ball size, travel widely, then converge visibly b
   const active = f.inspect().flocks;
   assert.ok(new Set(active.map(g => Math.floor(g.shape))).size >= 3, 'different motion families coexist');
   assert.ok(Math.max(...active.map(g => g.scale)) / Math.min(...active.map(g => g.scale)) > 1.3);
-  assert.ok(active.every(g => g.particles.filter(p => p.alpha > .5).length > 64));
+  assert.ok(active.some(g => g.particles.filter(p => p.alpha > .5).length > 64));
+  assert.ok(new Set(active.filter(g => g.active).map(g => g.population)).size > 1);
   const sizes = active[0].particles.map(p => p.size);
   assert.ok(Math.max(...sizes) / Math.min(...sizes) > 4);
+  const live = active.filter(g => g.active);
+  // Exercise all four disappearance styles on voices that are currently lit.
+  live.forEach((g, i) => { g.exitStyle = i % 4; });
+  assert.equal(new Set(live.map(g => g.exitStyle)).size, 4);
   volume = 0;
   for (let i = 0; i < 90; i++) await f.tick();
-  assert.ok(f.inspect().flocks.every(g => g.collapse > .8 && g.presence > .8), 'contraction is visible before fade');
+  assert.ok(live.every(g => g.exiting && g.collapse > .8 && g.presence > .8), 'exit choreography remains visible');
   for (let i = 0; i < 90; i++) await f.tick();
-  assert.ok(f.inspect().flocks.every(g => Math.hypot(g.x - 195, g.y - 370) < 3 && g.presence < .01));
+  assert.ok(live.every(g => g.presence < .02));
+  for (const g of live) {
+    if (g.exitStyle % 2 === 0) {
+      assert.ok(g.particles.every(p => Math.hypot(p.x - 195, p.y - 370) < 8), 'gathering exits reach the centre');
+    } else {
+      assert.ok(g.particles.some(p => p.x < 0 || p.x > 390 || p.y < 0 || p.y > 740), 'dispersal exits travel offscreen');
+    }
+  }
   volume = 160;
   for (let i = 0; i < 60; i++) await f.tick();
-  assert.ok(f.inspect().flocks.every(g => g.collapse < .01 && g.presence > .9));
+  assert.ok(f.inspect().flocks.some(g => g.active && g.collapse < .01 && g.presence > .9));
   f.nodes['#stop'].click();
 });
 
@@ -185,6 +199,25 @@ test('beat response stays immediate while speed and heading change with inertia'
       assert.ok(Number.isFinite(g.vx) && Number.isFinite(g.vy));
     });
   }
+  f.nodes['#stop'].click();
+});
+
+test('independent phrase lifetimes vary flock counts, symmetry and colour without fixed pairing', async () => {
+  const f = fixture(async stream => stream, { spectrum: data => data.fill(160) });
+  await f.nodes['#start'].click();
+  const counts = new Set(), shapes = new Set(), symmetry = new Set();
+  for (let i = 0; i < 120; i++) {
+    await f.tick(.1);
+    const voices = f.inspect().flocks.filter(g => g.active);
+    counts.add(voices.length);
+    voices.forEach(g => { shapes.add(Math.floor(g.shape) % 5); symmetry.add(g.mirrorType); });
+  }
+  assert.ok(counts.size > 2, 'voice count changes during sustained music');
+  assert.equal(shapes.size, 5);
+  assert.ok(symmetry.has(0) && symmetry.size >= 3, 'solo and multiple symmetry modes coexist');
+  const voices = f.inspect().flocks;
+  assert.ok(new Set(voices.map(g => g.colorShift.toFixed(2))).size > 3);
+  assert.ok(new Set(voices.map(g => g.speedScale.toFixed(2))).size > 3);
   f.nodes['#stop'].click();
 });
 
