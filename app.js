@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.3';
+  const VERSION = '2026.10.17.4';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -26,20 +26,29 @@
   let lights = [];
   const glowColors = ['255,153,76', '255,210,120', '255,239,210',
     '130,210,255', '110,145,255', '201,132,255', '255,145,186'];
-  const glows = glowColors.map(color => {
+  // Three optical profiles: crisp core, gentle bloom, diffuse glow.
+  const glows = glowColors.map(color => [0, 1, 2].map(softness => {
     const sprite = document.createElement('canvas');
     sprite.width = sprite.height = 128;
     const g = sprite.getContext('2d');
     const halo = g.createRadialGradient(64, 64, 0, 64, 64, 64);
     halo.addColorStop(0, 'rgba(255,250,239,1)');
-    halo.addColorStop(.025, `rgba(${color},1)`);
-    halo.addColorStop(.09, `rgba(${color},.65)`);
-    halo.addColorStop(.24, `rgba(${color},.22)`);
-    halo.addColorStop(.55, `rgba(${color},.055)`);
+    if (softness === 0) {
+      halo.addColorStop(.018, 'rgba(255,250,239,1)');
+      halo.addColorStop(.025, `rgba(${color},.85)`);
+      halo.addColorStop(.035, `rgba(${color},.13)`);
+      halo.addColorStop(.15, `rgba(${color},.045)`);
+      halo.addColorStop(.5, `rgba(${color},.008)`);
+    } else {
+      halo.addColorStop(softness === 1 ? .025 : .045, `rgba(${color},1)`);
+      halo.addColorStop(.09, `rgba(${color},${softness === 1 ? .45 : .75})`);
+      halo.addColorStop(.24, `rgba(${color},${softness === 1 ? .12 : .28})`);
+      halo.addColorStop(.55, `rgba(${color},${softness === 1 ? .025 : .07})`);
+    }
     halo.addColorStop(1, `rgba(${color},0)`);
     g.fillStyle = halo; g.fillRect(0, 0, 128, 128);
     return sprite;
-  });
+  }));
   function hash(x, y, salt) {
     let v = Math.imul(x ^ salt, 374761393) ^ Math.imul(y, 668265263);
     v = Math.imul(v ^ (v >>> 13), 1274126177);
@@ -54,6 +63,7 @@
         if (hash(x, y, 7331) > .0012) continue;
         lights.push({ x, y, band: Math.floor(hash(x, y, 19820119) * N),
           color: Math.floor(hash(x, y, 9187) * glows.length),
+          softness: Math.floor(hash(x, y, 7561) * 3),
           gain: .15 + .85 * Math.pow(hash(x, y, 451), 1.4),
           // Stable random response per light avoids frame-to-frame static.
           threshold: .08 + .34 * hash(x, y, 1723),
@@ -66,6 +76,7 @@
   let width = 1, height = 1, running = false, starting = false, demo = false;
   let audio = null, stream = null, source = null, analyser = null, bins = null, bands = [];
   let environment = .15, elapsed = 0, previous = 0, frameId = 0, generation = 0;
+  let densityPressure = 0, visibleDensity = 0;
   let wake = null, wakePending = false, noticeTimer;
   function resize() {
     const rect = canvas.getBoundingClientRect();
@@ -109,6 +120,7 @@
     starting = true; startButton.disabled = true; stopButton.disabled = false;
     startButton.textContent = '準備中…';
     environment = .15; elapsed = 0;
+    densityPressure = 0; visibleDensity = 0;
     channels.forEach(s => { s.baseline = s.intensity = 0; });
     let localAudio = null, localStream = null;
     try {
@@ -185,14 +197,33 @@
     // Use the pre-adaptation level for the initial flash, then adapt immediately.
     const gamma = lerp(1.3, 2.4, clamp((environment - .018) / (.5 - .018), 0, 1));
     channels.forEach((s, i) => {
-      const relative = energies[i] / environment;
+      const relative = energies[i] / (environment * Math.exp(densityPressure));
       const target = Math.pow(clamp(relative, 0, 1), gamma);
       // Continuous attack/release: approach the target instead of repeatedly
       // undershooting it. Release time constant 1.8s gives a gentle ~5s afterglow.
       const tau = target > s.intensity ? .045 : 1.8;
       s.intensity = lerp(target, s.intensity, Math.exp(-dt / tau));
     });
+    // Feedback measures visible stars, including afterglow. Adapt slowly so a
+    // sudden loud sound can flare before sustained crowding reduces sensitivity.
+    let visible = 0, total = 0;
+    for (const light of lights) {
+      if (light.x < 0 || light.x >= width || light.y < 0 || light.y >= height) continue;
+      total++;
+      if (lightStrength(light) * light.gain > .045) visible++;
+    }
+    const density = total ? visible / total : 0;
+    visibleDensity = lerp(density, visibleDensity, Math.exp(-dt / 2));
+    // Aim for roughly 18% visibly active stars; relax sensitivity in quiet.
+    densityPressure = clamp(densityPressure + (visibleDensity - .18) * dt * .9,
+      0, Math.log(32));
     environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
+  }
+  function lightStrength(light) {
+    const intensity = channels[light.band].intensity;
+    const response = clamp((intensity - light.threshold) /
+      (1 - light.threshold) * light.sensitivity, 0, 1);
+    return Math.pow(response, light.responseCurve);
   }
   function draw() {
     const k = (1 - Math.cos(2 * Math.PI * (elapsed % 60) / 60)) / 2;
@@ -202,15 +233,11 @@
     ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
     ctx.globalCompositeOperation = 'lighter';
     for (const light of lights) {
-      const intensity = channels[light.band].intensity;
-      // Each light has its own onset, sensitivity and brightness curve.
-      const response = clamp((intensity - light.threshold) /
-        (1 - light.threshold) * light.sensitivity, 0, 1);
-      const strength = Math.pow(response, light.responseCurve);
+      const strength = lightStrength(light);
       if (strength < .006) continue;
       const radius = light.radius * (.65 + 1.5 * Math.sqrt(strength));
       ctx.globalAlpha = strength * light.gain;
-      ctx.drawImage(glows[light.color], light.x - radius, light.y - radius,
+      ctx.drawImage(glows[light.color][light.softness], light.x - radius, light.y - radius,
         radius * 2, radius * 2);
     }
     ctx.globalAlpha = 1;
