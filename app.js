@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.6';
+  const VERSION = '2026.10.17.7';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -44,9 +44,9 @@
     if (softness === 0) {
       halo.addColorStop(.018, 'rgba(255,250,239,1)');
       halo.addColorStop(.025, `rgba(${color},.85)`);
-      halo.addColorStop(.035, `rgba(${color},.13)`);
-      halo.addColorStop(.15, `rgba(${color},.045)`);
-      halo.addColorStop(.5, `rgba(${color},.008)`);
+      halo.addColorStop(.035, `rgba(${color},.08)`);
+      halo.addColorStop(.15, `rgba(${color},.018)`);
+      halo.addColorStop(.5, `rgba(${color},.002)`);
     } else {
       halo.addColorStop(softness === 1 ? .025 : .045, `rgba(${color},1)`);
       halo.addColorStop(.09, `rgba(${color},${softness === 1 ? .45 : .75})`);
@@ -82,7 +82,8 @@
           condition: Math.floor(hash(x, y, 9203) * 3),
           delay: .1 + 2.9 * hash(x, y, 6421), intensity: 0,
           color: Math.floor(hash(x, y, 9187) * glows.length),
-          softness: Math.floor(hash(x, y, 7561) * 3),
+          // Keep most stars crisp, including after reroll: 80% / 17% / 3%.
+          softness: hash(x, y, 7561) < .8 ? 0 : hash(x, y, 7561) < .97 ? 1 : 2,
           gain: .15 + .85 * Math.pow(hash(x, y, 451), 1.4),
           // Stable random response per light avoids frame-to-frame static.
           threshold: .08 + .34 * hash(x, y, 1723),
@@ -370,6 +371,14 @@
       ctx.globalAlpha = strength * light.gain;
       ctx.drawImage(glows[light.color][light.softness], light.x - radius, light.y - radius,
         radius * 2, radius * 2);
+      if (light.softness === 0) {
+        // Draw a solid core in CSS pixels, independent of the soft halo sprite.
+        ctx.globalAlpha = Math.min(1, strength * (.65 + light.gain));
+        ctx.fillStyle = '#fff8e9';
+        ctx.beginPath();
+        ctx.arc(light.x, light.y, .55 + .85 * Math.sqrt(strength), 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     drawMeteors();
     ctx.globalAlpha = 1;
