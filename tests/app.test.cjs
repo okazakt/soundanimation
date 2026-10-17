@@ -37,9 +37,9 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode });\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
-    image: () => image, inspect: () => window.inspect(),
+    image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.16'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.17'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -267,4 +267,48 @@ test('visible version identifies the running script and matches cached asset URL
     assert.ok(sw.includes(`./${asset}?v=${version.slice(1)}`));
   }
   assert.ok(sw.includes(`PREFIX + '${version}'`));
+});
+
+function rhythmFixture() {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const values = new Float64Array(512);
+  return { f, step(dt, accent = false, silent = false, high = false) {
+    values.fill(silent ? 0 : .012);
+    if (accent) for (let i = high ? 330 : 0; i < (high ? 512 : 205); i++) values[i] = .65;
+    f.stepRhythm(values, dt); return f.inspect().rhythm;
+  } };
+}
+test('tempo recognition follows 90, 120 and 150 BPM across frame rates', () => {
+  for (const fps of [30, 60, 120]) for (const bpm of [90, 120, 150]) {
+    const { step } = rhythmFixture();
+    let state;
+    for (let i = 0; i < fps * 10; i++) {
+      const phase = (i / fps) % (60 / bpm);
+      state = step(1 / fps, phase < .06);
+    }
+    assert.ok(Math.abs(state.bpm - bpm) < 3, `${fps}fps ${bpm} BPM: ${state.bpm}`);
+    assert.ok(state.confidence > .45, `${bpm} BPM confidence: ${state.confidence}`);
+  }
+});
+test('clock bridges a missing kick, recognises treble rhythm, and releases in silence', () => {
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 60 * 8; i++) step(1 / 60, (i % 30) < 3, false, true);
+  assert.ok(Math.abs(f.inspect().rhythm.bpm - 120) < 3);
+  let predicted = 0;
+  for (let i = 0; i < 60; i++) { const r = step(1 / 60); if (r.beat) predicted++; assert.equal(r.onset, false); }
+  assert.ok(predicted >= 1 && predicted <= 3);
+  for (let i = 0; i < 180; i++) step(1 / 60, false, true);
+  assert.ok(f.inspect().rhythm.confidence < .01);
+  assert.ok(f.inspect().rhythm.pulse < .001);
+});
+test('sustained sound and irregular accents do not assert a confident tempo', () => {
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 600; i++) step(1 / 60);
+  assert.equal(f.inspect().rhythm.bpm, 0);
+  assert.equal(f.inspect().rhythm.confidence, 0);
+  const times = [.1, .41, 1.29, 1.51, 2.38, 2.75, 3.92, 4.19, 4.61, 5.47, 6.64, 7.01, 7.79, 8.1];
+  for (let i = 0; i < 600; i++) step(1 / 60, times.some(t => i / 60 >= t && i / 60 < t + .04));
+  assert.ok(f.inspect().rhythm.confidence < .3);
+  f.nodes['#next-mode'].click();
+  assert.equal(f.inspect().rhythm.confidence, 0);
 });

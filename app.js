@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.16';
+  const VERSION = '2026.10.17.17';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -113,7 +113,7 @@
   const historyTimes = new Float64Array(HISTORY_SIZE);
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
-    prepareFlocks();
+    prepareFlocks(); resetRhythm();
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
     lights.forEach(light => { light.intensity = 0; light.afterglow = 0; light.litAge = 0; light.fading = false; light.rest = 0; light.meteorReady = true; light.meteorRest = 0; });
@@ -284,6 +284,7 @@
       signals[i] = target;
     });
     recordSignals(dt);
+    updateRhythm(dt);
     if (mode === 'flocks') {
       updateFlocks(dt);
       environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
@@ -423,20 +424,108 @@
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // Online beat tracking: spectral onsets vote for a tempo, then a gently
+  // corrected clock carries the beat between transients. No sound is stored.
+  const rhythm = { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
+    period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0,
+    fluxAverage: 0, quiet: 0, onset: false, beat: false,
+    previous: new Float64Array(N), votes: new Float64Array(181), events: [] };
+  function resetRhythm() {
+    Object.assign(rhythm, { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
+      period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0,
+      fluxAverage: 0, quiet: 0, onset: false, beat: false });
+    rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = [];
+  }
+  function updateRhythm(dt) {
+    const r = rhythm;
+    r.time += dt; r.onset = false; r.beat = false;
+    let flux = 0, level = 0;
+    for (let i = 0; i < N; i++) {
+      const weight = i < 205 ? 1.2 : i < 410 ? 1 : .7;
+      flux += Math.max(0, energies[i] - r.previous[i]) * weight;
+      level += energies[i]; r.previous[i] = energies[i];
+    }
+    flux /= N; level /= N;
+    r.quiet = level > .003 ? 0 : r.quiet + dt;
+    const onset = flux > .006 && flux > r.fluxAverage * 2.2 + .002 && r.time - r.lastOnset > .19;
+    r.fluxAverage = lerp(flux, r.fluxAverage, Math.exp(-dt / .65));
+    const voteDecay = Math.exp(-dt / 5);
+    for (let bpm = 60; bpm <= 180; bpm++) r.votes[bpm] *= voteDecay;
+    r.events = r.events.filter(event => r.time - event.time < 7);
+    if (onset) {
+      r.onset = true; r.lastOnset = r.time;
+      for (let j = r.events.length - 1; j >= Math.max(0, r.events.length - 8); j--) {
+        const delta = r.time - r.events[j].time;
+        // Consecutive intervals get the most weight; longer spans bridge a
+        // missing kick. Multiple hypotheses cover half/double-tempo ambiguity.
+        for (let beats = 1; beats <= 8; beats++) {
+          const bpm = 60 * beats / delta;
+          if (bpm < 59 || bpm > 181) continue;
+          const weight = Math.exp(-delta / 4) / beats * (j === r.events.length - 1 ? 1.6 : .5);
+          for (let bin = Math.max(60, Math.floor(bpm) - 3); bin <= Math.min(180, Math.ceil(bpm) + 3); bin++) {
+            r.votes[bin] += weight * Math.exp(-.5 * ((bin - bpm) / 1.6) ** 2);
+          }
+        }
+      }
+      r.events.push({ time: r.time });
+      let winner = 0, best = 0, runner = 0;
+      for (let bpm = 60; bpm <= 180; bpm++) {
+        const prior = r.confidence > .45 && Math.abs(bpm - r.bpm) < 5 ? 1.12 : 1;
+        const score = r.votes[bpm] * prior;
+        if (score > best) { best = score; winner = bpm; }
+      }
+      for (let bpm = 60; bpm <= 180; bpm++) if (Math.abs(bpm - winner) > 6) runner = Math.max(runner, r.votes[bpm]);
+      if (winner && r.events.length >= 4) {
+        const period = 60 / winner;
+        const recent = r.events.slice(-10);
+        let coherent = 0;
+        for (const event of recent) {
+          const cycles = (r.time - event.time) / period;
+          if (Math.abs(cycles - Math.round(cycles)) < .14) coherent++;
+        }
+        const certainty = clamp((best - runner) / Math.max(.01, best) * 2, 0, 1) *
+          clamp((coherent / recent.length - .55) / .4, 0, 1) * clamp((recent.length - 2) / 4, 0, 1);
+        const wasLocked = r.confidence > .3;
+        r.confidence = lerp(r.confidence, certainty, .4);
+        if (certainty > .3) {
+          r.bpm = wasLocked ? lerp(r.bpm, winner, .22) : winner;
+          r.period = 60 / r.bpm;
+          if (!wasLocked) r.nextBeat = r.time + r.period;
+          else {
+            const nearest = r.nextBeat + Math.round((r.time - r.nextBeat) / r.period) * r.period;
+            const error = r.time - nearest;
+            if (Math.abs(error) < r.period * .2) r.nextBeat += clamp(error, -.06, .06) * .25;
+          }
+        }
+      }
+    }
+    const stale = r.time - r.lastOnset > Math.max(1.8, r.period * 3.5);
+    if (stale || r.quiet > .15) r.confidence *= Math.exp(-dt / (r.quiet > .15 ? .45 : 1.2));
+    if (r.confidence > .3 && r.quiet < .15) {
+      while (r.nextBeat <= r.time) {
+        if (r.time - r.lastBeat > r.period * .6) { r.beat = true; r.lastBeat = r.nextBeat; }
+        r.nextBeat += r.period;
+      }
+      r.phase = ((r.time - (r.nextBeat - r.period)) / r.period + 1) % 1;
+      r.pulse = Math.exp(-r.phase * 9);
+    } else { r.pulse *= Math.exp(-dt / .18); }
+    if (stale && r.confidence < .03) { r.bpm = 0; r.events = []; r.votes.fill(0); }
+  }
+
   // Five logarithmic frequency regions (angular frequency ω = 2πf has
   // the same band ordering). Particle colours follow their individual bands.
-  let flocks = [], beatAverage = 0, beatPrevious = 0, beatCooldown = 0;
+  let flocks = [], beatCooldown = 0;
   let backgroundTone = .5, backgroundEnergy = 0;
   const flockRanges = [0, 103, 205, 307, 410, N];
   function prepareFlocks() {
-    beatAverage = beatPrevious = beatCooldown = 0;
+    beatCooldown = 0;
     backgroundTone = .5; backgroundEnergy = 0;
     flocks = Array.from({ length: 10 }, (_, id) => ({
       id, region: id % 5, voice: Math.floor(id / 5), episode: 0,
       level: 0, presence: 0, pulse: 0, quiet: 10, collapse: 1,
       active: false, exiting: false, exitStyle: id % 4, trail: [],
       mirrorType: 0, mirrorAlpha: 0, population: 0, colorShift: 0,
-      shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0,
+      shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0, groove: 0,
       phaseSpeed: (.8 + (id % 5) * .16) * (.55 + hash(id, 0, 8020) * 1.1),
       speedScale: .55 + hash(id, 0, 8020) * 1.1,
       scale: .7 + hash(id, 0, 8011) * 1.3,
@@ -464,20 +553,12 @@
     body[velocity] = (body[velocity] - omega * impulse * dt) * decay;
   }
   function updateFlocks(dt) {
-    let total = 0, weighted = 0, bass = 0;
+    let total = 0, weighted = 0;
     for (let i = 0; i < N; i++) {
       total += energies[i]; weighted += energies[i] * i / (N - 1);
-      if (i < 205) bass += energies[i];
     }
-    bass /= 205;
-    beatCooldown = Math.max(0, beatCooldown - dt);
-    // Detect a rising bass onset against a slow local average, with a refractory
-    // period: a sustained tone must not repeatedly trigger the whole formation.
-    const beat = bass > .025 && bass > beatAverage * 1.45 + .008 &&
-      bass - beatPrevious > .006 && beatCooldown === 0;
-    if (beat) beatCooldown = .22;
-    beatAverage = lerp(bass, beatAverage, Math.exp(-dt / .6));
-    beatPrevious = bass;
+    const beat = rhythm.onset;
+    beatCooldown = Math.max(0, .19 - (rhythm.time - rhythm.lastOnset));
     backgroundTone = lerp(total > .001 ? weighted / total : backgroundTone,
       backgroundTone, Math.exp(-dt / 1.4));
     backgroundEnergy = lerp(clamp(total / N / .4, 0, 1), backgroundEnergy, Math.exp(-dt / .8));
@@ -519,11 +600,13 @@
       // Keep the flock visible during its journey home, then extinguish it.
       const visibility = f.quiet < 2 ? 1 : 0;
       f.presence = lerp(visibility, f.presence, Math.exp(-dt / (visibility ? .12 : .23)));
-      f.pulse = beat ? 1 : f.pulse * Math.exp(-dt / .3);
+      f.pulse = beat ? 1 : Math.max(f.pulse * Math.exp(-dt / .3), rhythm.pulse * rhythm.confidence);
+      const sway = (.5 + .5 * Math.cos(rhythm.phase * Math.PI * 2)) * rhythm.confidence;
+      f.groove = lerp(sway, f.groove, Math.exp(-dt / .14));
       f.motionLevel = lerp(f.level, f.motionLevel, Math.exp(-dt / .38));
       f.motionPulse = lerp(f.pulse, f.motionPulse, Math.exp(-dt / .12));
       // Beats still light up immediately; travel speed absorbs their impulse.
-      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25 + f.motionPulse * .7) * f.speedScale;
+      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25 + f.motionPulse * .7 + f.groove * .4) * f.speedScale;
       f.phaseSpeed = lerp(speedTarget, f.phaseSpeed, Math.exp(-dt / .5));
       f.phase += dt * f.phaseSpeed;
       const t = f.phase;
@@ -560,7 +643,7 @@
       f.trail.unshift({ x: f.x, y: f.y, time: elapsed });
       while (f.trail.length > 2 && f.trail[f.trail.length - 2].time < elapsed - 1.6) f.trail.pop();
       const radius = Math.min(width, height) * (.10 + f.motionLevel * .20) * f.scale *
-        (1 + f.motionPulse * .5) * (.8 + .2 * Math.sin(t * .4 + f.id));
+        (1 + f.motionPulse * .5 + f.groove * .18) * (.8 + .2 * Math.sin(t * .4 + f.id));
       const count = f.exiting ? f.exitPopulation : Math.round(16 + f.level * (64 + 48 * (.5 + .5 * Math.sin(t * .24 + f.id))));
       f.population = count;
       const symmetryChoice = Math.floor(hash(f.id, Math.floor(phrase), 8022) * 7);
@@ -598,7 +681,7 @@
           }
         }
         if (neighbours) { alignX /= neighbours; alignY /= neighbours; }
-        const speed = (50 + f.motionLevel * 65 + f.motionPulse * 18) * f.speedScale *
+        const speed = (50 + f.motionLevel * 65 + f.motionPulse * 18 + f.groove * 24) * f.speedScale *
           (.75 + p.tint * .5) * Math.min(width, height) / 390;
         const rotation = f.id % 2 ? -1 : 1;
         // These are velocity fields evaluated at the particle's CURRENT
