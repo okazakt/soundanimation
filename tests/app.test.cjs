@@ -5,14 +5,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const code = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-function fixture(getMicrophone) {
+function fixture(getMicrophone, options = {}) {
+  let image, now = 0;
   const events = {}, nodes = {}, frames = new Map();
   let nextFrame = 0, stopped = 0, closed = 0, released = 0, requestCount = 0;
   const gradient = { addColorStop() {} };
-  const context = new Proxy({}, { get(target, key) { return target[key] || (() => gradient); } });
+  const context = new Proxy({
+    createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; },
+    putImageData(data) { image = data; }
+  }, { get(target, key) { return target[key] || (() => gradient); } });
   const node = () => ({ disabled: false, textContent: '', classList: { add() {}, remove() {} },
     addEventListener(type, fn) { this[type] = fn; }, getContext: () => context,
-    getBoundingClientRect: () => ({ width: 390, height: 740 }) });
+    getBoundingClientRect: () => ({ width: options.width || 390, height: options.height || 740 }) });
   const stream = { getTracks: () => [{ stop() { stopped++; } }], getAudioTracks: () => [{ addEventListener() {} }] };
   const document = { hidden: false, querySelector: selector => nodes[selector] ||= node(), createElement: node,
     addEventListener(type, fn) { events[type] = fn; } };
@@ -21,7 +25,7 @@ function fixture(getMicrophone) {
     async resume() { this.state = 'running'; }
     async suspend() { this.state = 'suspended'; }
     async close() { if (this.state !== 'closed') closed++; this.state = 'closed'; }
-    createAnalyser() { return { frequencyBinCount: 2048, getByteFrequencyData(data) { data.fill(100); } }; }
+    createAnalyser() { return { frequencyBinCount: 2048, getByteFrequencyData(data) { if (options.spectrum) options.spectrum(data); else data.fill(100); } }; }
     createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
   }
   const navigator = { mediaDevices: { getUserMedia: async constraints => {
@@ -35,7 +39,8 @@ function fixture(getMicrophone) {
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
   vm.runInNewContext(code, sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
-    async tick() { const [id, fn] = frames.entries().next().value; frames.delete(id); fn(100); } };
+    image: () => image,
+    async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 test('start, draw, background/resume, stop release microphone and wake lock', async () => {
@@ -98,4 +103,55 @@ test('manifest paths and icon dimensions stay within app; no persistent user dat
   for (const decay of [.999, .992, .88, .65, .94, .85]) {
     for (const fps of [30, 60, 120]) assert.ok(Math.abs(Math.pow(Math.pow(decay, 60 / fps), fps) - Math.pow(decay, 60)) < 1e-12);
   }
+});
+
+const alphas = f => Array.from(f.image().data).filter((_, i) => i % 4 === 3);
+test('all backing pixels including edges can glow; assignments stay fixed on resize', async () => {
+  const f = fixture(async stream => stream, { width: 64, height: 48, spectrum: data => data.fill(255) });
+  assert.ok(alphas(f).every(a => a === 0), 'no pre-existing idle stars');
+  await f.nodes['#start'].click();
+  for (let i = 0; i < 10; i++) await f.tick();
+  assert.equal(f.image().width, 128); assert.equal(f.image().height, 96);
+  assert.ok(alphas(f).every(a => a > 0), 'every pixel is an emission candidate');
+  const before = Array.from(f.image().data);
+  f.events.resize();
+  assert.deepEqual(Array.from(f.image().data), before, 'resize does not randomize the field');
+  f.nodes['#stop'].click();
+  assert.ok(alphas(f).every(a => a === 0));
+});
+test('different frequencies illuminate different points throughout the field', async () => {
+  async function render(bin) {
+    const f = fixture(async stream => stream, { width: 64, height: 48,
+      spectrum: data => { data.fill(0); data[bin] = 255; } });
+    await f.nodes['#start'].click();
+    for (let i = 0; i < 8; i++) await f.tick();
+    const lit = alphas(f).map(a => a > 0);
+    const { width, height } = f.image();
+    for (let qy = 0; qy < 2; qy++) for (let qx = 0; qx < 2; qx++) {
+      assert.ok(lit.some((on, i) => on && Math.floor((i % width) / (width / 2)) === qx &&
+        Math.floor(Math.floor(i / width) / (height / 2)) === qy));
+    }
+    f.nodes['#stop'].click(); return lit;
+  }
+  assert.notDeepEqual(await render(4), await render(900));
+});
+test('silence fades continuously for seconds and release is independent of frame rate', async () => {
+  async function fade(fps) {
+    let signal = 255;
+    const f = fixture(async stream => stream, { width: 24, height: 16, spectrum: data => data.fill(signal) });
+    await f.nodes['#start'].click();
+    for (let i = 0; i < 30; i++) await f.tick();
+    const peak = Math.max(...alphas(f)); signal = 0;
+    let previous = peak;
+    for (let i = 0; i < fps * 5; i++) {
+      await f.tick(1 / fps);
+      const current = Math.max(...alphas(f));
+      assert.ok(current <= previous, 'no flickering or rebound during release');
+      if (i === fps - 1) assert.ok(current > peak * .5, 'still glows after one second');
+      previous = current;
+    }
+    assert.ok(previous > peak * .04 && previous < peak * .08, 'gentle five-second afterglow');
+    f.nodes['#stop'].click(); return previous;
+  }
+  assert.ok(Math.abs(await fade(30) - await fade(120)) <= 1);
 });

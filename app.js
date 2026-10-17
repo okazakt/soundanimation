@@ -1,6 +1,7 @@
 'use strict';
 (() => {
-  const N = 96;
+  // Spectral channels are shared by pixels; this is not a star count.
+  const N = 512;
   const canvas = document.querySelector('#canvas');
   const ctx = canvas.getContext('2d', { alpha: false });
   const startButton = document.querySelector('#start');
@@ -11,39 +12,41 @@
   const lerp = (a, b, k) => a + (b - a) * k;
   const rgb = hex => hex.match(/\w\w/g).map(v => parseInt(v, 16));
   const palette = ['FFB067', 'FFE0A3', 'FFF9EB', 'E6F2FF', '99BFFF'].map(rgb);
-  const radii = [3.2, 2.6, 2, 1.6, 1.2];
   const dusk = ['0B0E26', '281E46', '6E2E42', 'C2593F'].map(rgb);
   const midnight = ['020308', '060A17', '0B132B', '121E3D'].map(rgb);
   const stops = [0, .55, .85, 1];
-  let seed = 19820119;
-  function random() {
-    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
-    return (seed >>> 0) / 4294967296;
-  }
-  const positions = Array.from({ length: N }, (_, i) => ({
-    x: .05 + ((i % 12) + .5 + (random() * 2 - 1) * .38) * .9 / 12,
-    y: .05 + (Math.floor(i / 12) + .5 + (random() * 2 - 1) * .38) * .9 / 8
-  }));
-  for (let i = N - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [positions[i], positions[j]] = [positions[j], positions[i]];
-  }
-  const stars = positions.map((position, i) => {
-    const p = i / (N - 1) * 4;
-    const a = Math.min(3, Math.floor(p));
-    const color = palette[a].map((v, c) => Math.round(lerp(v, palette[a + 1][c], p - a)));
-    const halo = document.createElement('canvas');
-    halo.width = halo.height = 128;
-    const h = halo.getContext('2d');
-    const gradient = h.createRadialGradient(64, 64, 0, 64, 64, 64);
-    gradient.addColorStop(0, `rgba(${color},1)`);
-    gradient.addColorStop(.2, `rgba(${color},.45)`);
-    gradient.addColorStop(1, `rgba(${color},0)`);
-    h.fillStyle = gradient; h.fillRect(0, 0, 128, 128);
-    return { ...position, color, halo, radius: lerp(radii[a], radii[a + 1], p - a),
-      omega: .4 + random() * 1.2, phase: random() * Math.PI * 2,
-      baseline: 0, intensity: 0, over: 0 };
+  const channels = Array.from({ length: N }, (_, i) => {
+    const p = i / (N - 1) * 4, a = Math.min(3, Math.floor(p));
+    return { color: palette[a].map((v, c) => Math.round(lerp(v, palette[a + 1][c], p - a))),
+      phase: i * 2.3999632297, baseline: 0, intensity: 0 };
   });
+  const field = document.createElement('canvas');
+  const fieldContext = field.getContext('2d');
+  let pixels, pixelBands, pixelGains;
+  // Coordinate hashing keeps the assignment fixed, including across resizes.
+  function hash(x, y, salt) {
+    let v = Math.imul(x ^ salt, 374761393) ^ Math.imul(y, 668265263);
+    v = Math.imul(v ^ (v >>> 13), 1274126177);
+    return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
+  }
+  function prepareField() {
+    field.width = canvas.width; field.height = canvas.height;
+    pixels = fieldContext.createImageData(field.width, field.height);
+    const count = field.width * field.height;
+    pixelBands = new Uint16Array(count); pixelGains = new Uint8Array(count);
+    for (let y = 0, i = 0; y < field.height; y++) {
+      for (let x = 0; x < field.width; x++, i++) {
+        const band = Math.floor(hash(x, y, 19820119) * N);
+        pixelBands[i] = band;
+        // Every pixel can light up. A wide gain range gives bright, sparse peaks.
+        pixelGains[i] = Math.round(3 + 252 * Math.pow(hash(x, y, 7331), 18));
+        const color = channels[band].color;
+        pixels.data[i * 4] = color[0];
+        pixels.data[i * 4 + 1] = color[1];
+        pixels.data[i * 4 + 2] = color[2];
+      }
+    }
+  }
   let width = 1, height = 1, running = false, starting = false, demo = false;
   let audio = null, stream = null, source = null, analyser = null, bins = null, bands = [];
   let environment = .15, elapsed = 0, previous = 0, frameId = 0, generation = 0;
@@ -54,7 +57,8 @@
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (!running) draw();
+    prepareField();
+    draw();
   }
   function message(text, duration = 3000) {
     clearTimeout(noticeTimer);
@@ -74,7 +78,7 @@
   function configureBands() {
     const binHz = audio.sampleRate / analyser.fftSize;
     const maximum = Math.min(14000, audio.sampleRate / 2);
-    bands = stars.map((_, i) => {
+    bands = channels.map((_, i) => {
       const low = 40 * Math.pow(maximum / 40, i / N);
       const high = 40 * Math.pow(maximum / 40, (i + 1) / N);
       const first = Math.max(1, Math.ceil(low / binHz));
@@ -89,7 +93,7 @@
     starting = true; startButton.disabled = true; stopButton.disabled = false;
     startButton.textContent = '準備中…';
     environment = .15; elapsed = 0;
-    stars.forEach(s => { s.baseline = s.intensity = s.over = 0; });
+    channels.forEach(s => { s.baseline = s.intensity = 0; });
     let localAudio = null, localStream = null;
     try {
       const Audio = window.AudioContext || window.webkitAudioContext;
@@ -136,6 +140,7 @@
     if (wake) { wake.release().catch(() => {}); wake = null; }
     clearTimeout(noticeTimer); notice.classList.remove('visible');
     startButton.disabled = false; startButton.textContent = '開始'; stopButton.disabled = true;
+    channels.forEach(s => { s.intensity = 0; });
     intro.classList.remove('hidden'); draw();
   }
   const energies = new Float64Array(N);
@@ -143,7 +148,7 @@
     const frames = dt * 60;
     if (!demo) analyser.getByteFrequencyData(bins);
     let squares = 0;
-    stars.forEach((s, i) => {
+    channels.forEach((s, i) => {
       let energy;
       if (demo) {
         // Seeded sinusoidal pseudo-noise: repeatable simulation, with no recorded audio.
@@ -163,11 +168,13 @@
     const current = Math.sqrt(squares / N);
     // Use the pre-adaptation level for the initial flash, then adapt immediately.
     const gamma = lerp(1.3, 2.4, clamp((environment - .018) / (.5 - .018), 0, 1));
-    stars.forEach((s, i) => {
+    channels.forEach((s, i) => {
       const relative = energies[i] / environment;
       const target = Math.pow(clamp(relative, 0, 1), gamma);
-      s.intensity = target > s.intensity ? lerp(target, s.intensity, Math.pow(.65, frames)) : s.intensity * Math.pow(.94, frames);
-      s.over = Math.max(s.over * Math.pow(.85, frames), clamp((relative - 1) * .5, 0, 1));
+      // Continuous attack/release: approach the target instead of repeatedly
+      // undershooting it. Release time constant 1.8s gives a gentle ~5s afterglow.
+      const tau = target > s.intensity ? .045 : 1.8;
+      s.intensity = lerp(target, s.intensity, Math.exp(-dt / tau));
     });
     environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
   }
@@ -178,31 +185,15 @@
     stops.forEach((stop, i) => sky.addColorStop(stop, `rgb(${dusk[i].map((v, c) => Math.round(lerp(v, midnight[i][c], k)))})`));
     ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
     ctx.globalCompositeOperation = 'lighter';
-    let overSum = 0;
-    stars.forEach(s => {
-      const idle = .06 + .04 * Math.sin(elapsed * s.omega + s.phase);
-      const light = Math.min(1, s.intensity + idle), flash = 1 + s.over * 2;
-      const x = s.x * width, y = s.y * height;
-      const halo = s.radius * (2 + light * 12) * flash;
-      ctx.globalAlpha = light * .45;
-      ctx.drawImage(s.halo, x - halo, y - halo, halo * 2, halo * 2);
-      ctx.globalAlpha = Math.min(1, .25 + light * .75 + s.over);
-      ctx.fillStyle = '#fff'; ctx.beginPath();
-      ctx.arc(x, y, s.radius * (.7 + light * 1.4) * flash, 0, Math.PI * 2); ctx.fill();
-      if (light > .55 || s.over > .1) {
-        const length = s.radius * Math.max(0, light - .55, s.over * .45) * 35 * flash;
-        ctx.globalAlpha = clamp((light - .55) * 1.5 + s.over, 0, .8);
-        ctx.beginPath();
-        ctx.moveTo(x - length, y); ctx.lineTo(x, y - .65); ctx.lineTo(x + length, y); ctx.lineTo(x, y + .65); ctx.closePath();
-        ctx.moveTo(x, y - length); ctx.lineTo(x + .65, y); ctx.lineTo(x, y + length); ctx.lineTo(x - .65, y); ctx.closePath(); ctx.fill();
-      }
-      overSum += s.over;
-    });
-    if (overSum / N > .1) {
-      ctx.globalAlpha = overSum / N * .25; ctx.fillStyle = '#e6f2ff'; ctx.fillRect(0, 0, width, height);
+    for (let i = 0; i < pixelBands.length; i++) {
+      pixels.data[i * 4 + 3] = channels[pixelBands[i]].intensity * pixelGains[i];
     }
-    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    fieldContext.putImageData(pixels, 0, 0);
+    // The field contains one sample per backing-store pixel, including the edges.
+    ctx.drawImage(field, 0, 0, width, height);
+    ctx.globalCompositeOperation = 'source-over';
   }
+
   function frame(now) {
     if (!running || document.hidden) return;
     const dt = previous ? Math.min(.1, (now - previous) / 1000) : 1 / 60;
