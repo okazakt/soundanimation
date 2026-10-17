@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.10';
+  const VERSION = '2026.10.17.11';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -8,6 +8,8 @@
   const ctx = canvas.getContext('2d', { alpha: false });
   const startButton = document.querySelector('#start');
   const stopButton = document.querySelector('#stop');
+  const modeSelect = document.querySelector('#animation');
+  let mode = 'flocks';
   const intro = document.querySelector('#intro');
   const notice = document.querySelector('#notice');
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -63,6 +65,7 @@
   }
   function prepareField() {
     lights = []; meteors = [];
+    prepareFlocks();
     tuneField();
     // CSS coordinates keep density and halo size consistent on Retina screens.
     // Include offscreen sources so their glow can spill across screen edges.
@@ -107,6 +110,7 @@
   const historyTimes = new Float64Array(HISTORY_SIZE);
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
+    prepareFlocks();
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
     lights.forEach(light => { light.intensity = 0; light.afterglow = 0; light.litAge = 0; light.fading = false; light.rest = 0; light.meteorReady = true; light.meteorRest = 0; });
@@ -217,7 +221,7 @@
       if (localAudio && localAudio.state !== 'closed') await localAudio.close().catch(() => {});
       if (token !== generation) return;
       audio = null; stream = null; source = null; analyser = null; demo = true;
-      message('マイクへのアクセスを許可すると、音に反応して星が瞬きます（デモモードで動作中）');
+      message('マイクへのアクセスを許可すると、音に反応して光が動きます（デモモードで動作中）');
     }
     if (token !== generation) return;
     starting = false; running = true; startButton.textContent = '開始';
@@ -277,6 +281,11 @@
       signals[i] = target;
     });
     recordSignals(dt);
+    if (mode === 'flocks') {
+      updateFlocks(dt);
+      environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
+      return;
+    }
     for (const light of lights) {
       // Match unsmoothed input first; apply afterglow only after coincidence.
       const target = matchedSignal(light);
@@ -383,6 +392,7 @@
     return Math.pow(response, light.responseCurve);
   }
   function draw() {
+    if (mode === 'flocks') { drawFlocks(); return; }
     const k = (1 - Math.cos(2 * Math.PI * (elapsed % 60) / 60)) / 2;
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
     const sky = ctx.createLinearGradient(0, 0, 0, height);
@@ -410,12 +420,118 @@
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // Five logarithmic frequency regions (angular frequency ω = 2πf has
+  // the same band ordering). Particle colours follow their individual bands.
+  let flocks = [], beatAverage = 0, beatPrevious = 0, beatCooldown = 0;
+  let backgroundTone = .5, backgroundEnergy = 0;
+  const flockRanges = [0, 103, 205, 307, 410, N];
+  function prepareFlocks() {
+    beatAverage = beatPrevious = beatCooldown = 0;
+    backgroundTone = .5; backgroundEnergy = 0;
+    flocks = Array.from({ length: 5 }, (_, id) => ({
+      id, level: 0, presence: 0, pulse: 0,
+      x: width * (.2 + .6 * hash(id, 0, 8001)),
+      y: height * (.2 + .6 * hash(id, 0, 8002)),
+      heading: hash(id, 0, 8003) * Math.PI * 2,
+      phase: hash(id, 0, 8004) * Math.PI * 2,
+      particles: Array.from({ length: 64 }, (_, j) => ({
+        band: flockRanges[id] + Math.floor(hash(id, j, 8005) * (flockRanges[id + 1] - flockRanges[id])),
+        angle: j * 2.3999632297, distance: Math.sqrt((j + .5) / 64),
+        x: width * (.2 + .6 * hash(id, 0, 8001)),
+        y: height * (.2 + .6 * hash(id, 0, 8002)), alpha: 0, strength: 0
+      }))
+    }));
+  }
+  function updateFlocks(dt) {
+    let total = 0, weighted = 0, bass = 0;
+    for (let i = 0; i < N; i++) {
+      total += energies[i]; weighted += energies[i] * i / (N - 1);
+      if (i < 205) bass += energies[i];
+    }
+    bass /= 205;
+    beatCooldown = Math.max(0, beatCooldown - dt);
+    // Detect a rising bass onset against a slow local average, with a refractory
+    // period: a sustained tone must not repeatedly trigger the whole formation.
+    const beat = bass > .025 && bass > beatAverage * 1.45 + .008 &&
+      bass - beatPrevious > .006 && beatCooldown === 0;
+    if (beat) beatCooldown = .22;
+    beatAverage = lerp(bass, beatAverage, Math.exp(-dt / .6));
+    beatPrevious = bass;
+    backgroundTone = lerp(total > .001 ? weighted / total : backgroundTone,
+      backgroundTone, Math.exp(-dt / 1.4));
+    backgroundEnergy = lerp(clamp(total / N / .4, 0, 1), backgroundEnergy, Math.exp(-dt / .8));
+    for (const f of flocks) {
+      let sum = 0, peak = 0;
+      for (let i = flockRanges[f.id]; i < flockRanges[f.id + 1]; i++) {
+        sum += energies[i]; peak = Math.max(peak, energies[i]);
+      }
+      // Peak preserves narrow notes; mean makes rich passages more populous.
+      const target = clamp((sum / (flockRanges[f.id + 1] - flockRanges[f.id]) * .65 + peak * .35) / .38, 0, 1);
+      f.level = lerp(target, f.level, Math.exp(-dt / (target > f.level ? .12 : .9)));
+      f.presence = lerp(target > .035 ? 1 : 0, f.presence, Math.exp(-dt / .8));
+      f.pulse = beat ? 1 : f.pulse * Math.exp(-dt / .25);
+      const speed = (18 + f.id * 10 + f.level * 48) * (1 + f.pulse * 1.2);
+      f.phase += dt * (.23 + f.id * .085);
+      // Distinct wandering leaders plus soft edge steering keep every flock
+      // inside the viewport, without synchronized loops or teleporting wraps.
+      let ax = Math.cos(f.heading) + Math.sin(f.phase * 1.7 + f.id) * dt * .8;
+      let ay = Math.sin(f.heading) + Math.cos(f.phase * 1.3 + f.id * 2) * dt * .8;
+      const marginX = Math.min(90, width * .25), marginY = Math.min(90, height * .25);
+      ax += (Math.max(0, marginX - f.x) - Math.max(0, f.x - width + marginX)) / marginX * dt * 5;
+      ay += (Math.max(0, marginY - f.y) - Math.max(0, f.y - height + marginY)) / marginY * dt * 5;
+      f.heading = Math.atan2(ay, ax);
+      f.x = clamp(f.x + Math.cos(f.heading) * speed * dt, 0, width);
+      f.y = clamp(f.y + Math.sin(f.heading) * speed * dt, 0, height);
+      const radius = Math.min(width, height) * (.09 + f.level * .055) * (1 + f.pulse * .55);
+      const count = 8 + Math.round(f.level * 56);
+      f.particles.forEach((p, j) => {
+        p.strength = lerp(clamp(energies[p.band] / .4, 0, 1), p.strength, Math.exp(-dt / .18));
+        p.alpha = lerp(j < count ? f.presence : 0, p.alpha, Math.exp(-dt / .35));
+        const angle = p.angle + f.phase * (f.id % 2 ? -1 : 1);
+        const along = Math.cos(angle) * p.distance * radius;
+        const across = Math.sin(angle) * p.distance * radius * .55 + Math.sin(f.phase * 3 + j * .8) * radius * .12;
+        const x = clamp(f.x + Math.cos(f.heading) * along - Math.sin(f.heading) * across, 3, Math.max(3, width - 3));
+        const y = clamp(f.y + Math.sin(f.heading) * along + Math.cos(f.heading) * across, 3, Math.max(3, height - 3));
+        p.x = lerp(x, p.x, Math.exp(-dt / .14));
+        p.y = lerp(y, p.y, Math.exp(-dt / .14));
+      });
+    }
+  }
+  function drawFlocks() {
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    const hue = 285 - backgroundTone * 135;
+    const sky = ctx.createLinearGradient(0, 0, width * .3, height);
+    sky.addColorStop(0, `hsl(${hue},48%,${3 + backgroundEnergy * 5}%)`);
+    sky.addColorStop(1, `hsl(${hue + 35},55%,${7 + backgroundEnergy * 12}%)`);
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
+    ctx.globalCompositeOperation = 'lighter';
+    for (const f of flocks) for (const p of f.particles) {
+      if (p.alpha < .005) continue;
+      const color = channels[p.band].color;
+      const radius = 1.4 + p.strength * 1.8 + f.pulse * .6;
+      const glow = 12 + radius * 3;
+      const colorIndex = Math.round(p.band / (N - 1) * (glows.length - 1));
+      ctx.globalAlpha = p.alpha * (.3 + p.strength * .45);
+      ctx.drawImage(glows[colorIndex][2], p.x - glow, p.y - glow, glow * 2, glow * 2);
+      ctx.globalAlpha = p.alpha * (.55 + p.strength * .45);
+      ctx.fillStyle = `rgb(${color})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  }
+
   function frame(now) {
     if (!running || document.hidden) return;
     const dt = previous ? Math.min(.1, (now - previous) / 1000) : 1 / 60;
     previous = now; elapsed += dt; update(dt); draw();
     frameId = requestAnimationFrame(frame);
   }
+  modeSelect.addEventListener('change', () => {
+    mode = modeSelect.value === 'stars' ? 'stars' : 'flocks';
+    resetSignals(); densityPressure = 0; visibleDensity = 0;
+    canvas.setAttribute('aria-label', mode === 'flocks' ? '周波数とリズムに合わせて動く光の球の群れ' : '音に反応して瞬く星空');
+    draw();
+  });
   startButton.addEventListener('click', start);
   stopButton.addEventListener('click', stop);
   window.addEventListener('resize', resize);

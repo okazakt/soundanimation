@@ -21,3 +21,8 @@ button:not(:disabled):active { background: #c4dcff30; }
 #version { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); margin: 0; color: #c4c9d8; font-size: 11px; letter-spacing: .04em; pointer-events: none; text-shadow: 0 1px 4px #000; }
 
 
+@media (max-width: 420px) { footer { gap: 8px; } button { font-size: 13px; } }
+.animation-picker { display: flex; flex-direction: column; justify-content: center; gap: 4px; font-size: 10px; color: #c4c9d8; }
+select { min-height: 30px; max-width: 130px; background: #11182a; border: 1px solid #a9bed64d; border-radius: 7px; color: #f4f6ff; font: inherit; font-size: 14px; padding: 3px 6px; }
+select:focus-visible { outline: 2px solid #c4dcff; outline-offset: 3px; }
+@media (max-width: 420px) { footer { padding-left: 10px; padding-right: 10px; gap: 6px; } .animation-picker { font-size: 9px; } select { max-width: 100px; font-size: 12px; } button { letter-spacing: 0; } }

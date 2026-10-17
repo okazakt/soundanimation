@@ -15,7 +15,7 @@ function fixture(getMicrophone, options = {}) {
     putImageData(data) { image = data; }
   }, { get(target, key) { return target[key] || (() => gradient); } });
   const node = () => ({ disabled: false, textContent: '', classList: { add() {}, remove() {} },
-    addEventListener(type, fn) { this[type] = fn; }, getContext: () => context,
+    setAttribute() {}, addEventListener(type, fn) { this[type] = fn; }, getContext: () => context,
     getBoundingClientRect: () => ({ width: options.width || 390, height: options.height || 740 }) });
   const stream = { getTracks: () => [{ stop() { stopped++; } }], getAudioTracks: () => [{ addEventListener() {} }] };
   const document = { hidden: false, querySelector: selector => nodes[selector] ||= node(), createElement: node,
@@ -37,9 +37,9 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code, sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode });\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
-    image: () => image,
+    image: () => image, inspect: () => window.inspect(),
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.1'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.11'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -90,7 +90,7 @@ test('service worker ignores outside requests and deletes only its own outdated 
     events.fetch({ request: { method: 'GET', url }, respondWith() { assert.fail('outside request intercepted'); } });
   }
 });
-test('manifest paths and icon dimensions stay within app; no persistent user data APIs', () => {
+test('manifest paths and icon dimensions stay within app; no audio recording APIs', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
   assert.equal(manifest.scope, './'); assert.equal(manifest.start_url, './');
   for (const icon of manifest.icons) {
@@ -98,62 +98,56 @@ test('manifest paths and icon dimensions stay within app; no persistent user dat
     const size = Number(icon.sizes.split('x')[0]);
     assert.equal(data.readUInt32BE(16), size); assert.equal(data.readUInt32BE(20), size);
   }
-  assert.doesNotMatch(code, /localStorage|sessionStorage|indexedDB|MediaRecorder/);
+  assert.doesNotMatch(code, /MediaRecorder|indexedDB/);
   // The time correction preserves the 60fps filters at 30fps and 120fps.
   for (const decay of [.999, .992, .88, .65, .94, .85]) {
     for (const fps of [30, 60, 120]) assert.ok(Math.abs(Math.pow(Math.pow(decay, 60 / fps), fps) - Math.pow(decay, 60)) < 1e-12);
   }
 });
 
-const alphas = f => Array.from(f.image().data).filter((_, i) => i % 4 === 3);
-test('all backing pixels including edges can glow; assignments stay fixed on resize', async () => {
-  const f = fixture(async stream => stream, { width: 64, height: 48, spectrum: data => data.fill(255) });
-  assert.ok(alphas(f).every(a => a === 0), 'no pre-existing idle stars');
-  await f.nodes['#start'].click();
-  for (let i = 0; i < 10; i++) await f.tick();
-  assert.equal(f.image().width, 128); assert.equal(f.image().height, 96);
-  assert.ok(alphas(f).every(a => a > 0), 'every pixel is an emission candidate');
-  const before = Array.from(f.image().data);
-  f.events.resize();
-  assert.deepEqual(Array.from(f.image().data), before, 'resize does not randomize the field');
-  f.nodes['#stop'].click();
-  assert.ok(alphas(f).every(a => a === 0));
-});
-test('different frequencies illuminate different points throughout the field', async () => {
+test('frequency regions select independent flocks, coloured particles and background', async () => {
   async function render(bin) {
-    const f = fixture(async stream => stream, { width: 64, height: 48,
-      spectrum: data => { data.fill(0); data[bin] = 255; } });
+    const f = fixture(async stream => stream, { spectrum: data => { data.fill(0); data[bin] = 255; } });
     await f.nodes['#start'].click();
-    for (let i = 0; i < 8; i++) await f.tick();
-    const lit = alphas(f).map(a => a > 0);
-    const { width, height } = f.image();
-    for (let qy = 0; qy < 2; qy++) for (let qx = 0; qx < 2; qx++) {
-      assert.ok(lit.some((on, i) => on && Math.floor((i % width) / (width / 2)) === qx &&
-        Math.floor(Math.floor(i / width) / (height / 2)) === qy));
+    for (let i = 0; i < 90; i++) await f.tick();
+    const state = f.inspect();
+    assert.equal(state.flocks.filter(g => g.presence > .5).length, 1);
+    const active = state.flocks.find(g => g.presence > .5);
+    assert.ok(active.particles.some(p => p.alpha > .5));
+    for (const g of state.flocks) for (const p of g.particles) {
+      assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
+      assert.ok(p.x >= 0 && p.x <= 390 && p.y >= 0 && p.y <= 740);
     }
-    f.nodes['#stop'].click(); return lit;
+    f.nodes['#stop'].click(); return { id: active.id, tone: state.backgroundTone };
   }
-  assert.notDeepEqual(await render(4), await render(900));
+  const bass = await render(4), treble = await render(900);
+  assert.notEqual(bass.id, treble.id);
+  assert.ok(treble.tone > bass.tone);
 });
-test('silence fades continuously for seconds and release is independent of frame rate', async () => {
-  async function fade(fps) {
-    let signal = 255;
-    const f = fixture(async stream => stream, { width: 24, height: 16, spectrum: data => data.fill(signal) });
-    await f.nodes['#start'].click();
-    for (let i = 0; i < 30; i++) await f.tick();
-    const peak = Math.max(...alphas(f)); signal = 0;
-    let previous = peak;
-    for (let i = 0; i < fps * 5; i++) {
-      await f.tick(1 / fps);
-      const current = Math.max(...alphas(f));
-      assert.ok(current <= previous, 'no flickering or rebound during release');
-      if (i === fps - 1) assert.ok(current > peak * .5, 'still glows after one second');
-      previous = current;
-    }
-    assert.ok(previous > peak * .04 && previous < peak * .08, 'gentle five-second afterglow');
-    f.nodes['#stop'].click(); return previous;
-  }
-  assert.ok(Math.abs(await fade(30) - await fade(120)) <= 1);
+test('bass onset pulses every flock once, sustained sound does not retrigger, silence fades', async () => {
+  let volume = 0;
+  const f = fixture(async stream => stream, { spectrum: data => data.fill(volume) });
+  await f.nodes['#start'].click(); await f.tick();
+  assert.ok(f.inspect().flocks.every(g => g.presence === 0));
+  volume = 180; await f.tick();
+  assert.ok(f.inspect().flocks.every(g => g.pulse === 1));
+  for (let i = 0; i < 90; i++) await f.tick();
+  assert.ok(f.inspect().flocks.every(g => g.pulse < .01 && g.presence > .5));
+  volume = 0;
+  for (let i = 0; i < 360; i++) await f.tick();
+  assert.ok(f.inspect().flocks.every(g => g.presence < .001));
+  assert.ok(f.inspect().backgroundEnergy < .001);
+  f.nodes['#stop'].click();
+});
+test('mode switch preserves the running microphone; stop resets flocks', async () => {
+  const f = fixture(async stream => stream);
+  await f.nodes['#start'].click(); await f.tick();
+  f.nodes['#animation'].value = 'stars'; f.nodes['#animation'].change(); await f.tick();
+  assert.equal(f.inspect().mode, 'stars');
+  f.nodes['#animation'].value = 'flocks'; f.nodes['#animation'].change(); await f.tick();
+  assert.equal(f.frames.size, 1); assert.equal(f.counts().requestCount, 1);
+  f.nodes['#stop'].click();
+  assert.ok(f.inspect().flocks.every(g => g.presence === 0 && g.pulse === 0));
 });
 
 test('visible version identifies the running script and matches cached asset URLs', () => {

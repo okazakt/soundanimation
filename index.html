@@ -4,22 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#050714">
-  <meta name="description" content="音に呼応して瞬く、あなただけの夜空。">
+  <meta name="description" content="音に合わせて動く光の群れと、瞬く星空。">
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.17.10">
+  <link rel="stylesheet" href="./style.css?v=2026.10.17.11">
   <title>Starlight Bell</title>
-  <script src="./app.js?v=2026.10.17.10" defer></script>
+  <script src="./app.js?v=2026.10.17.11" defer></script>
 </head>
 <body>
-  <main id="sky" aria-label="音に反応する星空">
-    <canvas id="canvas" aria-label="音の周波数に応じて色の異なる光が周囲ににじみ、ゆっくり消えます"></canvas>
+  <main id="sky" aria-label="音に反応する光のアニメーション">
+    <canvas id="canvas" aria-label="周波数とリズムに合わせて動く光の球の群れ"></canvas>
     <p id="version" aria-label="アプリのバージョン">読み込み中…</p>
-    <div id="intro"><p class="eyebrow">STARLIGHT BELL</p><h1>音を、星空に。</h1><p>下の「開始」を押して<br>夜空を観測する</p></div>
+    <div id="intro"><p class="eyebrow">STARLIGHT BELL</p><h1>音を、光の動きに。</h1><p>下の「開始」を押して<br>音の流れを眺める</p></div>
     <p id="notice" role="status" aria-live="polite"></p>
   </main>
   <footer aria-label="観測の操作">
+    <label class="animation-picker">アニメーション<select id="animation"><option value="flocks">光の群れ</option><option value="stars">星空</option></select></label>
     <button id="start" type="button">開始</button>
     <button id="stop" type="button" disabled>終了</button>
   </footer>
