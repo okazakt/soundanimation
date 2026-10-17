@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.7';
+  const VERSION = '2026.10.17.8';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -25,7 +25,6 @@
   // Sparse, stable emitters with overlapping halos instead of pixel noise.
   let lights = [], meteors = [], meteorCooldown = 0, flowAngle = Math.PI / 3;
   let fieldSeed = 0;
-  try { fieldSeed = Number(localStorage.getItem('starlight-seed')) >>> 0; } catch {}
   let tuning;
   function tuneField() {
     tuning = { density: .0009 + .0005 * hash(0, 0, 6101),
@@ -82,7 +81,7 @@
           condition: Math.floor(hash(x, y, 9203) * 3),
           delay: .1 + 2.9 * hash(x, y, 6421), intensity: 0,
           color: Math.floor(hash(x, y, 9187) * glows.length),
-          // Keep most stars crisp, including after reroll: 80% / 17% / 3%.
+          // Keep most stars crisp, on every start: 80% / 17% / 3%.
           softness: hash(x, y, 7561) < .8 ? 0 : hash(x, y, 7561) < .97 ? 1 : 2,
           gain: .15 + .85 * Math.pow(hash(x, y, 451), 1.4),
           // Stable random response per light avoids frame-to-frame static.
@@ -178,6 +177,8 @@
     const token = ++generation;
     starting = true; startButton.disabled = true; stopButton.disabled = false;
     startButton.textContent = '準備中…';
+    fieldSeed = (fieldSeed + 1 + Math.floor(Math.random() * 0xfffffffe)) >>> 0;
+    prepareField();
     environment = .15; elapsed = 0;
     densityPressure = 0; visibleDensity = 0; resetSignals();
     channels.forEach(s => { s.baseline = s.intensity = 0; });
@@ -345,12 +346,6 @@
       ctx.drawImage(glows[meteor.color][1], meteor.x - 18, meteor.y - 18, 36, 36);
     }
   }
-  function reroll() {
-    fieldSeed = (fieldSeed + 1 + Math.floor(Math.random() * 0xfffffffe)) >>> 0;
-    try { localStorage.setItem('starlight-seed', String(fieldSeed)); } catch {}
-    prepareField(); resetSignals(); densityPressure = 0; visibleDensity = 0;
-    draw(); message('星の配置・音の組み合わせ・光のバランスを振り直しました');
-  }
   function lightStrength(light) {
     const intensity = light.intensity;
     const response = clamp((intensity - light.threshold) /
@@ -393,7 +388,6 @@
   }
   startButton.addEventListener('click', start);
   stopButton.addEventListener('click', stop);
-  document.querySelector('#reroll').addEventListener('click', reroll);
   window.addEventListener('resize', resize);
   new ResizeObserver(resize).observe(document.querySelector('#sky'));
   document.addEventListener('visibilitychange', () => {
