@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.4';
+  const VERSION = '2026.10.17.5';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -62,6 +62,9 @@
       for (let x = -64; x < width + 64; x++) {
         if (hash(x, y, 7331) > .0012) continue;
         lights.push({ x, y, band: Math.floor(hash(x, y, 19820119) * N),
+          pairOffset: 1 + Math.floor(hash(x, y, 3719) * (N - 1)),
+          condition: Math.floor(hash(x, y, 9203) * 3),
+          delay: .1 + 2.9 * hash(x, y, 6421), intensity: 0,
           color: Math.floor(hash(x, y, 9187) * glows.length),
           softness: Math.floor(hash(x, y, 7561) * 3),
           gain: .15 + .85 * Math.pow(hash(x, y, 451), 1.4),
@@ -76,6 +79,44 @@
   let width = 1, height = 1, running = false, starting = false, demo = false;
   let audio = null, stream = null, source = null, analyser = null, bins = null, bands = [];
   let environment = .15, elapsed = 0, previous = 0, frameId = 0, generation = 0;
+  const signals = new Float32Array(N);
+  const HISTORY_SIZE = 2048;
+  const history = new Float32Array(HISTORY_SIZE * N);
+  const historyTimes = new Float64Array(HISTORY_SIZE);
+  let historyCount = 0, signalTime = 0;
+  function resetSignals() {
+    signals.fill(0); historyCount = 0; signalTime = 0;
+    lights.forEach(light => { light.intensity = 0; });
+  }
+  function recordSignals(dt) {
+    signalTime += dt;
+    const slot = historyCount % HISTORY_SIZE;
+    history.set(signals, slot * N); historyTimes[slot] = signalTime;
+    historyCount++;
+  }
+  function pastSignal(band, delay) {
+    const time = signalTime - delay;
+    let low = Math.max(0, historyCount - HISTORY_SIZE), high = historyCount - 1;
+    if (high < 0 || time < historyTimes[low % HISTORY_SIZE] - 1e-9) return 0;
+    // Locate by time, so delays remain the same at different frame rates.
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (historyTimes[mid % HISTORY_SIZE] <= time) low = mid;
+      else high = mid - 1;
+    }
+    const slot = low % HISTORY_SIZE, next = (low + 1) % HISTORY_SIZE;
+    const value = history[slot * N + band];
+    if (low === historyCount - 1) return value;
+    const k = clamp((time - historyTimes[slot]) /
+      (historyTimes[next] - historyTimes[slot]), 0, 1);
+    return lerp(value, history[next * N + band], k);
+  }
+  function matchedSignal(light) {
+    const pair = (light.band + light.pairOffset) % N;
+    const partner = light.condition === 0 ? signals[pair] :
+      pastSignal(light.condition === 1 ? light.band : pair, light.delay);
+    return Math.min(signals[light.band], partner);
+  }
   let densityPressure = 0, visibleDensity = 0;
   let wake = null, wakePending = false, noticeTimer;
   function resize() {
@@ -120,7 +161,7 @@
     starting = true; startButton.disabled = true; stopButton.disabled = false;
     startButton.textContent = '準備中…';
     environment = .15; elapsed = 0;
-    densityPressure = 0; visibleDensity = 0;
+    densityPressure = 0; visibleDensity = 0; resetSignals();
     channels.forEach(s => { s.baseline = s.intensity = 0; });
     let localAudio = null, localStream = null;
     try {
@@ -169,6 +210,7 @@
     clearTimeout(noticeTimer); notice.classList.remove('visible');
     startButton.disabled = false; startButton.textContent = '開始'; stopButton.disabled = true;
     channels.forEach(s => { s.intensity = 0; });
+    resetSignals();
     intro.classList.remove('hidden'); draw();
   }
   const energies = new Float64Array(N);
@@ -199,11 +241,15 @@
     channels.forEach((s, i) => {
       const relative = energies[i] / (environment * Math.exp(densityPressure));
       const target = Math.pow(clamp(relative, 0, 1), gamma);
-      // Continuous attack/release: approach the target instead of repeatedly
-      // undershooting it. Release time constant 1.8s gives a gentle ~5s afterglow.
-      const tau = target > s.intensity ? .045 : 1.8;
-      s.intensity = lerp(target, s.intensity, Math.exp(-dt / tau));
+      signals[i] = target;
     });
+    recordSignals(dt);
+    for (const light of lights) {
+      // Match unsmoothed input first; apply afterglow only after coincidence.
+      const target = matchedSignal(light);
+      const tau = target > light.intensity ? .045 : 1.8;
+      light.intensity = lerp(target, light.intensity, Math.exp(-dt / tau));
+    }
     // Feedback measures visible stars, including afterglow. Adapt slowly so a
     // sudden loud sound can flare before sustained crowding reduces sensitivity.
     let visible = 0, total = 0;
@@ -220,7 +266,7 @@
     environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
   }
   function lightStrength(light) {
-    const intensity = channels[light.band].intensity;
+    const intensity = light.intensity;
     const response = clamp((intensity - light.threshold) /
       (1 - light.threshold) * light.sensitivity, 0, 1);
     return Math.pow(response, light.responseCurve);
