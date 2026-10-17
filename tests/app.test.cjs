@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.11'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.12'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -139,6 +139,29 @@ test('bass onset pulses every flock once, sustained sound does not retrigger, si
   assert.ok(f.inspect().backgroundEnergy < .001);
   f.nodes['#stop'].click();
 });
+test('flocks vary in scale and ball size, travel widely, then converge visibly before fading', async () => {
+  let volume = 160;
+  const f = fixture(async stream => stream, { spectrum: data => data.fill(volume) });
+  await f.nodes['#start'].click();
+  const positions = [];
+  for (let i = 0; i < 180; i++) { await f.tick(); positions.push(f.inspect().flocks[0].x); }
+  assert.ok(Math.max(...positions) - Math.min(...positions) > 100);
+  const active = f.inspect().flocks;
+  assert.ok(Math.max(...active.map(g => g.scale)) / Math.min(...active.map(g => g.scale)) > 1.3);
+  assert.ok(active.every(g => g.particles.filter(p => p.alpha > .5).length > 64));
+  const sizes = active[0].particles.map(p => p.size);
+  assert.ok(Math.max(...sizes) / Math.min(...sizes) > 4);
+  volume = 0;
+  for (let i = 0; i < 90; i++) await f.tick();
+  assert.ok(f.inspect().flocks.every(g => g.collapse > .8 && g.presence > .8), 'contraction is visible before fade');
+  for (let i = 0; i < 90; i++) await f.tick();
+  assert.ok(f.inspect().flocks.every(g => Math.hypot(g.x - 195, g.y - 370) < 3 && g.presence < .01));
+  volume = 160;
+  for (let i = 0; i < 60; i++) await f.tick();
+  assert.ok(f.inspect().flocks.every(g => g.collapse < .01 && g.presence > .9));
+  f.nodes['#stop'].click();
+});
+
 test('mode switch preserves the running microphone; stop resets flocks', async () => {
   const f = fixture(async stream => stream);
   await f.nodes['#start'].click(); await f.tick();

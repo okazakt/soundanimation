@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.11';
+  const VERSION = '2026.10.17.12';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -429,14 +429,16 @@
     beatAverage = beatPrevious = beatCooldown = 0;
     backgroundTone = .5; backgroundEnergy = 0;
     flocks = Array.from({ length: 5 }, (_, id) => ({
-      id, level: 0, presence: 0, pulse: 0,
+      id, level: 0, presence: 0, pulse: 0, quiet: 10, collapse: 1,
+      scale: .7 + hash(id, 0, 8011) * 1.3,
       x: width * (.2 + .6 * hash(id, 0, 8001)),
       y: height * (.2 + .6 * hash(id, 0, 8002)),
       heading: hash(id, 0, 8003) * Math.PI * 2,
       phase: hash(id, 0, 8004) * Math.PI * 2,
-      particles: Array.from({ length: 64 }, (_, j) => ({
+      particles: Array.from({ length: 128 }, (_, j) => ({
         band: flockRanges[id] + Math.floor(hash(id, j, 8005) * (flockRanges[id + 1] - flockRanges[id])),
-        angle: j * 2.3999632297, distance: Math.sqrt((j + .5) / 64),
+        angle: j * 2.3999632297, distance: .3 + .7 * Math.sqrt(hash(id, j, 8010)),
+        size: .65 + Math.pow(hash(id, j, 8012), 2.4) * 4.8,
         x: width * (.2 + .6 * hash(id, 0, 8001)),
         y: height * (.2 + .6 * hash(id, 0, 8002)), alpha: 0, strength: 0
       }))
@@ -465,35 +467,44 @@
       for (let i = flockRanges[f.id]; i < flockRanges[f.id + 1]; i++) {
         sum += energies[i]; peak = Math.max(peak, energies[i]);
       }
-      // Peak preserves narrow notes; mean makes rich passages more populous.
-      const target = clamp((sum / (flockRanges[f.id + 1] - flockRanges[f.id]) * .65 + peak * .35) / .38, 0, 1);
-      f.level = lerp(target, f.level, Math.exp(-dt / (target > f.level ? .12 : .9)));
-      f.presence = lerp(target > .035 ? 1 : 0, f.presence, Math.exp(-dt / .8));
-      f.pulse = beat ? 1 : f.pulse * Math.exp(-dt / .25);
-      const speed = (18 + f.id * 10 + f.level * 48) * (1 + f.pulse * 1.2);
-      f.phase += dt * (.23 + f.id * .085);
-      // Distinct wandering leaders plus soft edge steering keep every flock
-      // inside the viewport, without synchronized loops or teleporting wraps.
-      let ax = Math.cos(f.heading) + Math.sin(f.phase * 1.7 + f.id) * dt * .8;
-      let ay = Math.sin(f.heading) + Math.cos(f.phase * 1.3 + f.id * 2) * dt * .8;
-      const marginX = Math.min(90, width * .25), marginY = Math.min(90, height * .25);
-      ax += (Math.max(0, marginX - f.x) - Math.max(0, f.x - width + marginX)) / marginX * dt * 5;
-      ay += (Math.max(0, marginY - f.y) - Math.max(0, f.y - height + marginY)) / marginY * dt * 5;
-      f.heading = Math.atan2(ay, ax);
-      f.x = clamp(f.x + Math.cos(f.heading) * speed * dt, 0, width);
-      f.y = clamp(f.y + Math.sin(f.heading) * speed * dt, 0, height);
-      const radius = Math.min(width, height) * (.09 + f.level * .055) * (1 + f.pulse * .55);
-      const count = 8 + Math.round(f.level * 56);
+      // Normalise against the listening level, so quiet music also fills the
+      // screen. A raw floor still distinguishes silence from genuine notes.
+      const energy = sum / (flockRanges[f.id + 1] - flockRanges[f.id]) * .65 + peak * .35;
+      const target = energy < .003 ? 0 : clamp(energy / Math.max(.045, environment * .7), 0, 1);
+      f.level = lerp(target, f.level, Math.exp(-dt / (target > f.level ? .09 : .45)));
+      f.quiet = target > .035 ? 0 : f.quiet + dt;
+      f.collapse = lerp(clamp((f.quiet - .18) / 1.15, 0, 1), f.collapse, Math.exp(-dt / .18));
+      // Keep the flock visible during its journey home, then extinguish it.
+      const visibility = f.quiet < 1.6 ? 1 : 0;
+      f.presence = lerp(visibility, f.presence, Math.exp(-dt / (visibility ? .12 : .23)));
+      f.pulse = beat ? 1 : f.pulse * Math.exp(-dt / .3);
+      f.phase += dt * (.9 + f.id * .22 + f.level * 1.8 + f.pulse * 2.6);
+      const t = f.phase;
+      // Large, musical figure-eight paths. Each frequency family has its own
+      // speed and shape; a reflected partner answers across a screen axis.
+      const extent = (1 - f.collapse) * (.6 + f.level * .4);
+      const tx = width * .5 + Math.sin(t + f.id * .9) * width * .32 * extent;
+      const ty = height * .5 + Math.sin(t * (f.id % 2 ? 2 : 1) + f.id * 1.4) * height * .34 * extent;
+      f.heading = Math.atan2(ty - f.y, tx - f.x);
+      f.x = lerp(tx, f.x, Math.exp(-dt / .12));
+      f.y = lerp(ty, f.y, Math.exp(-dt / .12));
+      const radius = Math.min(width, height) * (.14 + f.level * .19) * f.scale *
+        (1 + f.pulse * .65) * (1 - f.collapse);
+      const count = 32 + Math.round(f.level * 96);
       f.particles.forEach((p, j) => {
-        p.strength = lerp(clamp(energies[p.band] / .4, 0, 1), p.strength, Math.exp(-dt / .18));
-        p.alpha = lerp(j < count ? f.presence : 0, p.alpha, Math.exp(-dt / .35));
-        const angle = p.angle + f.phase * (f.id % 2 ? -1 : 1);
+        p.strength = lerp(clamp(energies[p.band] / Math.max(.06, environment), 0, 1), p.strength, Math.exp(-dt / .12));
+        p.alpha = lerp(j < count ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
+        const angle = p.angle + t * (f.id % 2 ? -1 : 1);
         const along = Math.cos(angle) * p.distance * radius;
-        const across = Math.sin(angle) * p.distance * radius * .55 + Math.sin(f.phase * 3 + j * .8) * radius * .12;
-        const x = clamp(f.x + Math.cos(f.heading) * along - Math.sin(f.heading) * across, 3, Math.max(3, width - 3));
-        const y = clamp(f.y + Math.sin(f.heading) * along + Math.cos(f.heading) * across, 3, Math.max(3, height - 3));
-        p.x = lerp(x, p.x, Math.exp(-dt / .14));
-        p.y = lerp(y, p.y, Math.exp(-dt / .14));
+        const across = Math.sin(angle * (f.id % 3 === 0 ? 2 : 1)) * p.distance * radius *
+          (.45 + .3 * Math.sin(t * .7) ** 2);
+        // Compress smoothly near the edges instead of piling balls at a clamp.
+        const ox = Math.cos(f.heading) * along - Math.sin(f.heading) * across;
+        const oy = Math.sin(f.heading) * along + Math.cos(f.heading) * across;
+        const x = f.x + Math.tanh(ox / Math.max(1, radius)) * Math.min(radius, f.x * .9, (width - f.x) * .9);
+        const y = f.y + Math.tanh(oy / Math.max(1, radius)) * Math.min(radius, f.y * .9, (height - f.y) * .9);
+        p.x = lerp(x, p.x, Math.exp(-dt / .075));
+        p.y = lerp(y, p.y, Math.exp(-dt / .075));
       });
     }
   }
@@ -508,14 +519,19 @@
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
       const color = channels[p.band].color;
-      const radius = 1.4 + p.strength * 1.8 + f.pulse * .6;
+      const radius = p.size * (.8 + p.strength * 1.15 + f.pulse * .65) * (1 - f.collapse * .8);
       const glow = 12 + radius * 3;
       const colorIndex = Math.round(p.band / (N - 1) * (glows.length - 1));
-      ctx.globalAlpha = p.alpha * (.3 + p.strength * .45);
-      ctx.drawImage(glows[colorIndex][2], p.x - glow, p.y - glow, glow * 2, glow * 2);
-      ctx.globalAlpha = p.alpha * (.55 + p.strength * .45);
-      ctx.fillStyle = `rgb(${color})`;
-      ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fill();
+      // Alternate left/right and top/bottom reflection by frequency family.
+      const mirrorX = f.id % 2 === 0 ? width - p.x : p.x;
+      const mirrorY = f.id % 2 === 0 ? p.y : height - p.y;
+      for (const [x, y] of [[p.x, p.y], [mirrorX, mirrorY]]) {
+        ctx.globalAlpha = p.alpha * (.35 + p.strength * .45);
+        ctx.drawImage(glows[colorIndex][2], x - glow, y - glow, glow * 2, glow * 2);
+        ctx.globalAlpha = p.alpha * (.6 + p.strength * .4);
+        ctx.fillStyle = `rgb(${color})`;
+        ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+      }
     }
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   }
