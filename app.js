@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.5';
+  const VERSION = '2026.10.17.6';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -23,7 +23,15 @@
       phase: i * 2.3999632297, baseline: 0, intensity: 0 };
   });
   // Sparse, stable emitters with overlapping halos instead of pixel noise.
-  let lights = [];
+  let lights = [], meteors = [], meteorCooldown = 0, flowAngle = Math.PI / 3;
+  let fieldSeed = 0;
+  try { fieldSeed = Number(localStorage.getItem('starlight-seed')) >>> 0; } catch {}
+  let tuning;
+  function tuneField() {
+    tuning = { density: .0009 + .0005 * hash(0, 0, 6101),
+      size: .8 + .4 * hash(0, 0, 6102),
+      sensitivity: .85 + .3 * hash(0, 0, 6103) };
+  }
   const glowColors = ['255,153,76', '255,210,120', '255,239,210',
     '130,210,255', '110,145,255', '201,132,255', '255,145,186'];
   // Three optical profiles: crisp core, gentle bloom, diffuse glow.
@@ -50,18 +58,26 @@
     return sprite;
   }));
   function hash(x, y, salt) {
-    let v = Math.imul(x ^ salt, 374761393) ^ Math.imul(y, 668265263);
+    let v = Math.imul(x ^ salt ^ fieldSeed, 374761393) ^ Math.imul(y, 668265263);
     v = Math.imul(v ^ (v >>> 13), 1274126177);
     return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
   }
   function prepareField() {
-    lights = [];
+    lights = []; meteors = [];
+    tuneField();
     // CSS coordinates keep density and halo size consistent on Retina screens.
     // Include offscreen sources so their glow can spill across screen edges.
     for (let y = -64; y < height + 64; y++) {
       for (let x = -64; x < width + 64; x++) {
-        if (hash(x, y, 7331) > .0012) continue;
+        if (hash(x, y, 7331) > tuning.density) continue;
         lights.push({ x, y, band: Math.floor(hash(x, y, 19820119) * N),
+          thirdOffset: 1 + Math.floor(hash(x, y, 7391) * (N - 1)),
+          thirdDelay: 3.2 + 1.3 * hash(x, y, 7392),
+          meteorThreshold: .5 + .3 * hash(x, y, 7393),
+          meteorReady: true, meteorRest: 0,
+          angleOffset: (hash(x, y, 7394) - .5) * .12,
+          trail: 65 + 120 * hash(x, y, 7395),
+          speed: 150 + 170 * hash(x, y, 7396),
           pairOffset: 1 + Math.floor(hash(x, y, 3719) * (N - 1)),
           condition: Math.floor(hash(x, y, 9203) * 3),
           delay: .1 + 2.9 * hash(x, y, 6421), intensity: 0,
@@ -70,9 +86,9 @@
           gain: .15 + .85 * Math.pow(hash(x, y, 451), 1.4),
           // Stable random response per light avoids frame-to-frame static.
           threshold: .08 + .34 * hash(x, y, 1723),
-          sensitivity: .65 + 1.15 * hash(x, y, 6197),
+          sensitivity: (.65 + 1.15 * hash(x, y, 6197)) * tuning.sensitivity,
           responseCurve: 1.2 + 1.4 * hash(x, y, 2851),
-          radius: 14 + 28 * hash(x, y, 831) });
+          radius: (14 + 28 * hash(x, y, 831)) * tuning.size });
       }
     }
   }
@@ -86,7 +102,8 @@
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
     signals.fill(0); historyCount = 0; signalTime = 0;
-    lights.forEach(light => { light.intensity = 0; });
+    meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
+    lights.forEach(light => { light.intensity = 0; light.meteorReady = true; light.meteorRest = 0; });
   }
   function recordSignals(dt) {
     signalTime += dt;
@@ -236,6 +253,14 @@
       squares += energies[i] ** 2;
     });
     const current = Math.sqrt(squares / N);
+    let weighted = 0, totalEnergy = 0;
+    for (let i = 0; i < N; i++) {
+      weighted += energies[i] * i / (N - 1); totalEnergy += energies[i];
+    }
+    if (totalEnergy > .01) {
+      const direction = Math.PI * (.2 + .6 * weighted / totalEnergy);
+      flowAngle = lerp(direction, flowAngle, Math.exp(-dt / 2.5));
+    }
     // Use the pre-adaptation level for the initial flash, then adapt immediately.
     const gamma = lerp(1.3, 2.4, clamp((environment - .018) / (.5 - .018), 0, 1));
     channels.forEach((s, i) => {
@@ -250,6 +275,7 @@
       const tau = target > light.intensity ? .045 : 1.8;
       light.intensity = lerp(target, light.intensity, Math.exp(-dt / tau));
     }
+    updateMeteors(dt);
     // Feedback measures visible stars, including afterglow. Adapt slowly so a
     // sudden loud sound can flare before sustained crowding reduces sensitivity.
     let visible = 0, total = 0;
@@ -264,6 +290,65 @@
     densityPressure = clamp(densityPressure + (visibleDensity - .18) * dt * .9,
       0, Math.log(32));
     environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
+  }
+  function meteorMatch(light) {
+    const pair = (light.band + light.pairOffset) % N;
+    let third = (light.band + light.thirdOffset) % N;
+    if (third === pair) third = (third + 1) % N;
+    if (third === light.band) third = (third + 1) % N;
+    return Math.min(signals[light.band], pastSignal(pair, light.delay),
+      pastSignal(third, light.thirdDelay));
+  }
+  function updateMeteors(dt) {
+    meteorCooldown = Math.max(0, meteorCooldown - dt);
+    for (const meteor of meteors) {
+      meteor.age += dt;
+      meteor.x += Math.cos(meteor.angle) * meteor.speed * dt;
+      meteor.y += Math.sin(meteor.angle) * meteor.speed * dt;
+    }
+    meteors = meteors.filter(m => m.age < m.life);
+    let candidate = null, candidateScore = 0;
+    for (const light of lights) {
+      light.meteorRest = Math.max(0, light.meteorRest - dt);
+      const match = meteorMatch(light);
+      if (match < light.meteorThreshold * .55) light.meteorReady = true;
+      if (!light.meteorReady || light.meteorRest > 0 || match < light.meteorThreshold) continue;
+      if (light.x < 0 || light.x > width || light.y < 0 || light.y > height) continue;
+      // A new three-point match is an event, not a continuously firing source.
+      light.meteorReady = false;
+      if (lightStrength(light) < .03) continue;
+      const score = match * (.5 + Math.random());
+      if (score > candidateScore) { candidate = light; candidateScore = score; }
+    }
+    if (!candidate || meteorCooldown > 0 || meteors.length >= 3) return;
+    const match = meteorMatch(candidate);
+    candidate.meteorRest = 8 + Math.random() * 8;
+    meteorCooldown = .9 + Math.random() * 1.6;
+    meteors.push({ x: candidate.x, y: candidate.y, color: candidate.color,
+      angle: flowAngle + candidate.angleOffset, speed: candidate.speed * (.7 + match),
+      trail: candidate.trail * (.6 + match), age: 0, life: 1 + match * .8 });
+  }
+  function drawMeteors() {
+    for (const meteor of meteors) {
+      const fade = Math.min(1, meteor.age / .08) * Math.pow(1 - meteor.age / meteor.life, .6);
+      const length = Math.min(meteor.trail, meteor.age * meteor.speed);
+      const tx = meteor.x - Math.cos(meteor.angle) * length;
+      const ty = meteor.y - Math.sin(meteor.angle) * length;
+      const tail = ctx.createLinearGradient(tx, ty, meteor.x, meteor.y);
+      tail.addColorStop(0, `rgba(${glowColors[meteor.color]},0)`);
+      tail.addColorStop(.7, `rgba(${glowColors[meteor.color]},.35)`);
+      tail.addColorStop(1, 'rgba(255,249,235,1)');
+      ctx.globalAlpha = fade; ctx.strokeStyle = tail; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(meteor.x, meteor.y); ctx.stroke();
+      ctx.globalAlpha = fade * .85;
+      ctx.drawImage(glows[meteor.color][1], meteor.x - 18, meteor.y - 18, 36, 36);
+    }
+  }
+  function reroll() {
+    fieldSeed = (fieldSeed + 1 + Math.floor(Math.random() * 0xfffffffe)) >>> 0;
+    try { localStorage.setItem('starlight-seed', String(fieldSeed)); } catch {}
+    prepareField(); resetSignals(); densityPressure = 0; visibleDensity = 0;
+    draw(); message('星の配置・音の組み合わせ・光のバランスを振り直しました');
   }
   function lightStrength(light) {
     const intensity = light.intensity;
@@ -286,6 +371,7 @@
       ctx.drawImage(glows[light.color][light.softness], light.x - radius, light.y - radius,
         radius * 2, radius * 2);
     }
+    drawMeteors();
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
@@ -298,6 +384,7 @@
   }
   startButton.addEventListener('click', start);
   stopButton.addEventListener('click', stop);
+  document.querySelector('#reroll').addEventListener('click', reroll);
   window.addEventListener('resize', resize);
   new ResizeObserver(resize).observe(document.querySelector('#sky'));
   document.addEventListener('visibilitychange', () => {
