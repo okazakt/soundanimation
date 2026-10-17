@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.13'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.14'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -160,6 +160,31 @@ test('flocks vary in scale and ball size, travel widely, then converge visibly b
   volume = 160;
   for (let i = 0; i < 60; i++) await f.tick();
   assert.ok(f.inspect().flocks.every(g => g.collapse < .01 && g.presence > .9));
+  f.nodes['#stop'].click();
+});
+
+test('beat response stays immediate while speed and heading change with inertia', async () => {
+  let volume = 0;
+  const f = fixture(async stream => stream, { spectrum: data => data.fill(volume) });
+  await f.nodes['#start'].click(); await f.tick();
+  volume = 200;
+  const before = f.inspect().flocks.map(g => ({ speed: g.phaseSpeed, heading: g.heading }));
+  await f.tick();
+  assert.ok(f.inspect().flocks.every(g => g.pulse === 1), 'beat lights remain immediate');
+  f.inspect().flocks.forEach((g, i) => {
+    assert.ok(g.phaseSpeed - before[i].speed < .02, 'travel does not jump on the beat');
+    assert.ok(Math.abs(g.heading - before[i].heading) <= 1.6 / 60 + 1e-9);
+  });
+  for (let i = 0; i < 150; i++) {
+    const previous = f.inspect().flocks.map(g => ({ speed: g.phaseSpeed, heading: g.heading }));
+    volume = i % 30 < 5 ? 200 : 0;
+    await f.tick();
+    f.inspect().flocks.forEach((g, j) => {
+      assert.ok(Math.abs(g.heading - previous[j].heading) <= 1.6 / 60 + 1e-9);
+      assert.ok(Math.abs(g.phaseSpeed - previous[j].speed) < .08);
+      assert.ok(Number.isFinite(g.vx) && Number.isFinite(g.vy));
+    });
+  }
   f.nodes['#stop'].click();
 });
 

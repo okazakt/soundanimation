@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.13';
+  const VERSION = '2026.10.17.14';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -433,7 +433,8 @@
     backgroundTone = .5; backgroundEnergy = 0;
     flocks = Array.from({ length: 5 }, (_, id) => ({
       id, level: 0, presence: 0, pulse: 0, quiet: 10, collapse: 1,
-      shape: 0,
+      shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0,
+      phaseSpeed: .9 + id * .22,
       scale: .7 + hash(id, 0, 8011) * 1.3,
       x: width * (.2 + .6 * hash(id, 0, 8001)),
       y: height * (.2 + .6 * hash(id, 0, 8002)),
@@ -444,9 +445,18 @@
         angle: j * 2.3999632297, distance: .3 + .7 * Math.sqrt(hash(id, j, 8010)),
         size: .65 + Math.pow(hash(id, j, 8012), 2.4) * 4.8,
         x: width * (.2 + .6 * hash(id, 0, 8001)),
-        y: height * (.2 + .6 * hash(id, 0, 8002)), alpha: 0, strength: 0
+        y: height * (.2 + .6 * hash(id, 0, 8002)), alpha: 0, strength: 0, vx: 0, vy: 0
       }))
     }));
+  }
+  // Exact critically damped spring for a fixed target over this frame.
+  // Position and velocity remain continuous when the target changes.
+  function springAxis(body, axis, velocity, target, omega, dt) {
+    const offset = body[axis] - target;
+    const impulse = body[velocity] + omega * offset;
+    const decay = Math.exp(-omega * dt);
+    body[axis] = target + (offset + impulse * dt) * decay;
+    body[velocity] = (body[velocity] - omega * impulse * dt) * decay;
   }
   function updateFlocks(dt) {
     let total = 0, weighted = 0, bass = 0;
@@ -482,7 +492,12 @@
       const visibility = f.quiet < 1.6 ? 1 : 0;
       f.presence = lerp(visibility, f.presence, Math.exp(-dt / (visibility ? .12 : .23)));
       f.pulse = beat ? 1 : f.pulse * Math.exp(-dt / .3);
-      f.phase += dt * (.9 + f.id * .22 + f.level * 1.8 + f.pulse * 2.6);
+      f.motionLevel = lerp(f.level, f.motionLevel, Math.exp(-dt / .38));
+      f.motionPulse = lerp(f.pulse, f.motionPulse, Math.exp(-dt / .12));
+      // Beats still light up immediately; travel speed absorbs their impulse.
+      const speedTarget = .9 + f.id * .22 + f.motionLevel * 1.45 + f.motionPulse * .9;
+      f.phaseSpeed = lerp(speedTarget, f.phaseSpeed, Math.exp(-dt / .5));
+      f.phase += dt * f.phaseSpeed;
       const t = f.phase;
       // Blend between orbit, rolling waves, radial breathing and a broad
       // sweep. Frequency and phrase position choose different shapes per flock.
@@ -504,11 +519,15 @@
       const a = path(shape), b = path((shape + 1) % 4);
       const tx = width * (.5 + lerp(a[0], b[0], mix) * extent);
       const ty = height * (.5 + lerp(a[1], b[1], mix) * extent);
-      f.heading = Math.atan2(ty - f.y, tx - f.x);
-      f.x = lerp(tx, f.x, Math.exp(-dt / .12));
-      f.y = lerp(ty, f.y, Math.exp(-dt / .12));
-      const radius = Math.min(width, height) * (.14 + f.level * .19) * f.scale *
-        (1 + f.pulse * .65) * (1 - f.collapse);
+      springAxis(f, 'x', 'vx', tx, 7, dt);
+      springAxis(f, 'y', 'vy', ty, 7, dt);
+      if (Math.hypot(f.vx, f.vy) > 3) {
+        const desired = Math.atan2(f.vy, f.vx);
+        const turn = Math.atan2(Math.sin(desired - f.heading), Math.cos(desired - f.heading));
+        f.heading += clamp(turn * (1 - Math.exp(-dt / .35)), -1.6 * dt, 1.6 * dt);
+      }
+      const radius = Math.min(width, height) * (.14 + f.motionLevel * .19) * f.scale *
+        (1 + f.motionPulse * .65) * (1 - f.collapse);
       const count = 32 + Math.round(f.level * 96);
       f.particles.forEach((p, j) => {
         p.strength = lerp(clamp(energies[p.band] / Math.max(.06, environment), 0, 1), p.strength, Math.exp(-dt / .12));
@@ -528,8 +547,8 @@
         const oy = Math.sin(f.heading) * along + Math.cos(f.heading) * across;
         const x = f.x + Math.tanh(ox / Math.max(1, radius)) * Math.min(radius, f.x * .9, (width - f.x) * .9);
         const y = f.y + Math.tanh(oy / Math.max(1, radius)) * Math.min(radius, f.y * .9, (height - f.y) * .9);
-        p.x = lerp(x, p.x, Math.exp(-dt / .075));
-        p.y = lerp(y, p.y, Math.exp(-dt / .075));
+        springAxis(p, 'x', 'vx', x, 13, dt);
+        springAxis(p, 'y', 'vy', y, 13, dt);
       });
     }
   }
