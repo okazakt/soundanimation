@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.8';
+  const VERSION = '2026.10.17.9';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -87,6 +87,10 @@
           // Stable random response per light avoids frame-to-frame static.
           threshold: .08 + .34 * hash(x, y, 1723),
           sensitivity: (.65 + 1.15 * hash(x, y, 6197)) * tuning.sensitivity,
+          // Most fade gently; a smaller group retains a much longer afterglow.
+          releaseTime: hash(x, y, 4831) < .22 ?
+            4 + 3 * hash(x, y, 4832) : 1.8 + .8 * hash(x, y, 4832),
+          afterglow: 0,
           responseCurve: 1.2 + 1.4 * hash(x, y, 2851),
           radius: (14 + 28 * hash(x, y, 831)) * tuning.size });
       }
@@ -103,7 +107,7 @@
   function resetSignals() {
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
-    lights.forEach(light => { light.intensity = 0; light.meteorReady = true; light.meteorRest = 0; });
+    lights.forEach(light => { light.intensity = 0; light.afterglow = 0; light.meteorReady = true; light.meteorRest = 0; });
   }
   function recordSignals(dt) {
     signalTime += dt;
@@ -274,8 +278,7 @@
     for (const light of lights) {
       // Match unsmoothed input first; apply afterglow only after coincidence.
       const target = matchedSignal(light);
-      const tau = target > light.intensity ? .045 : 1.8;
-      light.intensity = lerp(target, light.intensity, Math.exp(-dt / tau));
+      updateLight(light, target, dt);
     }
     updateMeteors(dt);
     // Feedback measures visible stars, including afterglow. Adapt slowly so a
@@ -292,6 +295,15 @@
     densityPressure = clamp(densityPressure + (visibleDensity - .18) * dt * .9,
       0, Math.log(32));
     environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
+  }
+  function updateLight(light, target, dt) {
+    // Only a strong coincidence charges the extra persistence; quiet input
+    // cannot repeatedly hold a star on. The stored charge fades over time.
+    light.afterglow *= Math.exp(-dt / 8);
+    if (target > .7) light.afterglow = Math.max(light.afterglow, (target - .7) / .3);
+    const release = light.releaseTime * (1 + .6 * light.afterglow);
+    const tau = target > light.intensity ? .045 : release;
+    light.intensity = lerp(target, light.intensity, Math.exp(-dt / tau));
   }
   function meteorMatch(light) {
     const pair = (light.band + light.pairOffset) % N;
