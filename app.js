@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.12';
+  const VERSION = '2026.10.17.13';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -8,7 +8,10 @@
   const ctx = canvas.getContext('2d', { alpha: false });
   const startButton = document.querySelector('#start');
   const stopButton = document.querySelector('#stop');
-  const modeSelect = document.querySelector('#animation');
+  const laneCanvas = document.querySelector('#lane-transition');
+  const theme = document.querySelector('#theme');
+  let themeTimer;
+  let laneAnimations = [];
   let mode = 'flocks';
   const intro = document.querySelector('#intro');
   const notice = document.querySelector('#notice');
@@ -430,6 +433,7 @@
     backgroundTone = .5; backgroundEnergy = 0;
     flocks = Array.from({ length: 5 }, (_, id) => ({
       id, level: 0, presence: 0, pulse: 0, quiet: 10, collapse: 1,
+      shape: 0,
       scale: .7 + hash(id, 0, 8011) * 1.3,
       x: width * (.2 + .6 * hash(id, 0, 8001)),
       y: height * (.2 + .6 * hash(id, 0, 8002)),
@@ -480,11 +484,26 @@
       f.pulse = beat ? 1 : f.pulse * Math.exp(-dt / .3);
       f.phase += dt * (.9 + f.id * .22 + f.level * 1.8 + f.pulse * 2.6);
       const t = f.phase;
-      // Large, musical figure-eight paths. Each frequency family has its own
-      // speed and shape; a reflected partner answers across a screen axis.
+      // Blend between orbit, rolling waves, radial breathing and a broad
+      // sweep. Frequency and phrase position choose different shapes per flock.
+      // Both leader paths and particle formations morph; no fixed figure-eight.
+      const phrase = elapsed / 7 + f.id * .83 + backgroundTone * .7;
+      const shape = ((Math.floor(phrase) % 4) + 4) % 4;
+      const mix = (1 - Math.cos(Math.PI * clamp((phrase % 1 - .55) / .45, 0, 1))) / 2;
+      f.shape = shape + mix;
       const extent = (1 - f.collapse) * (.6 + f.level * .4);
-      const tx = width * .5 + Math.sin(t + f.id * .9) * width * .32 * extent;
-      const ty = height * .5 + Math.sin(t * (f.id % 2 ? 2 : 1) + f.id * 1.4) * height * .34 * extent;
+      const path = kind => {
+        if (kind === 0) return [Math.cos(t) * .31, Math.sin(t) * .28];
+        if (kind === 1) return [Math.sin(t * .55) * .35, Math.sin(t * 1.3 + f.id) * .18];
+        if (kind === 2) {
+          const r = .12 + .22 * (.5 + .5 * Math.sin(t * .6));
+          return [Math.cos(t * .4 + f.id) * r, Math.sin(t * .4 + f.id) * r];
+        }
+        return [Math.sin(t * .45 + f.id) * .2, Math.cos(t * .7) * .37];
+      };
+      const a = path(shape), b = path((shape + 1) % 4);
+      const tx = width * (.5 + lerp(a[0], b[0], mix) * extent);
+      const ty = height * (.5 + lerp(a[1], b[1], mix) * extent);
       f.heading = Math.atan2(ty - f.y, tx - f.x);
       f.x = lerp(tx, f.x, Math.exp(-dt / .12));
       f.y = lerp(ty, f.y, Math.exp(-dt / .12));
@@ -495,9 +514,15 @@
         p.strength = lerp(clamp(energies[p.band] / Math.max(.06, environment), 0, 1), p.strength, Math.exp(-dt / .12));
         p.alpha = lerp(j < count ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
         const angle = p.angle + t * (f.id % 2 ? -1 : 1);
-        const along = Math.cos(angle) * p.distance * radius;
-        const across = Math.sin(angle * (f.id % 3 === 0 ? 2 : 1)) * p.distance * radius *
-          (.45 + .3 * Math.sin(t * .7) ** 2);
+        const formation = kind => {
+          if (kind === 0) return [Math.cos(angle) * p.distance, Math.sin(angle) * p.distance * .7];
+          if (kind === 1) return [(p.distance * 2 - 1) * 1.4, Math.sin(p.angle * 2 + t) * .24];
+          if (kind === 2) return [Math.cos(angle) * (.4 + p.distance * .6), Math.sin(angle) * (.4 + p.distance * .6)];
+          return [(p.distance * 2 - 1), Math.sin(p.angle + t * .5) * p.distance * .35];
+        };
+        const fa = formation(shape), fb = formation((shape + 1) % 4);
+        const along = lerp(fa[0], fb[0], mix) * radius;
+        const across = lerp(fa[1], fb[1], mix) * radius;
         // Compress smoothly near the edges instead of piling balls at a clamp.
         const ox = Math.cos(f.heading) * along - Math.sin(f.heading) * across;
         const oy = Math.sin(f.heading) * along + Math.cos(f.heading) * across;
@@ -542,12 +567,35 @@
     previous = now; elapsed += dt; update(dt); draw();
     frameId = requestAnimationFrame(frame);
   }
-  modeSelect.addEventListener('change', () => {
-    mode = modeSelect.value === 'stars' ? 'stars' : 'flocks';
+  function switchLane(direction) {
+    laneAnimations.forEach(animation => animation.cancel());
+    laneAnimations = [];
+    laneCanvas.width = canvas.width; laneCanvas.height = canvas.height;
+    laneCanvas.getContext('2d').drawImage(canvas, 0, 0);
+    mode = mode === 'flocks' ? 'stars' : 'flocks';
     resetSignals(); densityPressure = 0; visibleDensity = 0;
-    canvas.setAttribute('aria-label', mode === 'flocks' ? '周波数とリズムに合わせて動く光の球の群れ' : '音に反応して瞬く星空');
+    const isFlocks = mode === 'flocks';
+    const title = isFlocks ? '光の群れ' : '星空';
+    document.querySelector('#theme-title').textContent = title;
+    document.querySelector('#theme-description').textContent = isFlocks ? '音の流れを、光の翼に。' : '音の余韻を、夜空のきらめきに。';
+    document.querySelector('#theme-number').textContent = isFlocks ? '01 / 02' : '02 / 02';
+    document.querySelector('#intro-title').textContent = isFlocks ? '音を、光の動きに。' : '音を、星空に。';
+    canvas.setAttribute('aria-label', isFlocks ? '周波数とリズムに合わせて動く光の球の群れ' : '音に反応して瞬く星空');
+    document.querySelector('#previous-mode').setAttribute('aria-label', `前のアニメーション：${isFlocks ? '星空' : '光の群れ'}`);
+    document.querySelector('#next-mode').setAttribute('aria-label', `次のアニメーション：${isFlocks ? '星空' : '光の群れ'}`);
     draw();
-  });
+    if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches && canvas.animate) {
+      const timing = { duration: 460, easing: 'cubic-bezier(.22,.7,.25,1)' };
+      laneAnimations = [
+        laneCanvas.animate([{ transform: 'translateX(0)', opacity: 1 }, { transform: `translateX(${-direction * 100}%)`, opacity: 0 }], timing),
+        canvas.animate([{ transform: `translateX(${direction * 100}%)`, opacity: 0 }, { transform: 'translateX(0)', opacity: 1 }], timing)
+      ];
+    }
+    clearTimeout(themeTimer); theme.classList.add('visible');
+    themeTimer = setTimeout(() => theme.classList.remove('visible'), 2400);
+  }
+  document.querySelector('#previous-mode').addEventListener('click', () => switchLane(-1));
+  document.querySelector('#next-mode').addEventListener('click', () => switchLane(1));
   startButton.addEventListener('click', start);
   stopButton.addEventListener('click', stop);
   window.addEventListener('resize', resize);

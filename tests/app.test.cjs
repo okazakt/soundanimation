@@ -78,7 +78,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.12'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.13'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -147,6 +147,7 @@ test('flocks vary in scale and ball size, travel widely, then converge visibly b
   for (let i = 0; i < 180; i++) { await f.tick(); positions.push(f.inspect().flocks[0].x); }
   assert.ok(Math.max(...positions) - Math.min(...positions) > 100);
   const active = f.inspect().flocks;
+  assert.ok(new Set(active.map(g => Math.floor(g.shape))).size >= 3, 'different motion families coexist');
   assert.ok(Math.max(...active.map(g => g.scale)) / Math.min(...active.map(g => g.scale)) > 1.3);
   assert.ok(active.every(g => g.particles.filter(p => p.alpha > .5).length > 64));
   const sizes = active[0].particles.map(p => p.size);
@@ -165,9 +166,11 @@ test('flocks vary in scale and ball size, travel widely, then converge visibly b
 test('mode switch preserves the running microphone; stop resets flocks', async () => {
   const f = fixture(async stream => stream);
   await f.nodes['#start'].click(); await f.tick();
-  f.nodes['#animation'].value = 'stars'; f.nodes['#animation'].change(); await f.tick();
+  f.nodes['#next-mode'].click(); await f.tick();
   assert.equal(f.inspect().mode, 'stars');
-  f.nodes['#animation'].value = 'flocks'; f.nodes['#animation'].change(); await f.tick();
+  assert.equal(f.nodes['#theme-title'].textContent, '星空');
+  f.nodes['#previous-mode'].click();
+  assert.equal(f.nodes['#theme-title'].textContent, '光の群れ'); await f.tick();
   assert.equal(f.frames.size, 1); assert.equal(f.counts().requestCount, 1);
   f.nodes['#stop'].click();
   assert.ok(f.inspect().flocks.every(g => g.presence === 0 && g.pulse === 0));
