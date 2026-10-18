@@ -21,7 +21,7 @@ function clientFixture(autoReady = true, options = {}) {
     createBiquadFilter: () => ({ frequency: {}, connect() {}, disconnect() {} }),
     createGain: () => ({ gain: {}, connect() {}, disconnect() {} }), destination: {} };
   const source = { connections: new Set(), connect(node) { this.connections.add(node); }, disconnect(node) { this.connections.delete(node); } };
-  const window = { Worker, AudioWorkletNode };
+  const window = { Worker, AudioWorkletNode, BeatThisAudio: require('../beat-this-audio.js') };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../beat-this-client.js'), 'utf8'), {
     window, Worker, AudioWorkletNode, document: { baseURI: 'https://example.test/soundanimation/' }, URL,
     setTimeout, clearTimeout, performance: { now: () => clock++ }, ...options

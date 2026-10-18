@@ -1,7 +1,7 @@
 'use strict';
 (function () {
   class BeatThisClient {
-    constructor(onState, onStatus, onStorage = () => {}) { this.onState = onState; this.onStatus = onStatus; this.onStorage = onStorage; this.stopped = false; this.pending = 0; }
+    constructor(onState, onStatus, onStorage = () => {}, onInput = () => {}) { this.onState = onState; this.onStatus = onStatus; this.onStorage = onStorage; this.onInput = onInput; this.stopped = false; this.pending = 0; }
     async prepareStorage(serviceWorker) {
       this.onStorage('PWAの保存機能を準備中');
       this.onStatus('保存済みモデルとPWAを準備中');
@@ -50,10 +50,10 @@
     }
     async start(context, source) {
       if (!context.audioWorklet || !window.AudioWorkletNode || !window.Worker) throw new Error('このブラウザはAI音声処理に対応していません');
-      this.context = context; this.source = source;
+      this.context = context; this.source = source; this.inputLevel = new window.BeatThisAudio.AutoLevel();
       if (typeof navigator !== 'undefined' && navigator.serviceWorker) await this.prepareStorage(navigator.serviceWorker);
       if (this.stopped) return;
-      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.22', document.baseURI), { type: 'module' });
+      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.23', document.baseURI), { type: 'module' });
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => this.fail('モデル準備がタイムアウトしました（通信・空きメモリを確認）'), 180000);
         this.readyReject = error => { clearTimeout(timer); reject(error); };
@@ -65,6 +65,7 @@
           else if (data.type === 'error') this.fail(data.message);
           else if (data.type === 'ack') this.pending = Math.max(0, this.pending - 1);
           else if (data.type === 'resync') {
+            this.inputLevel.reset();
             this.onState(null);
             this.onStatus(`入力を自動再同期（${Math.round(data.gapMs)}ms・${data.rate}Hz）・音を収集中`);
           }
@@ -78,11 +79,13 @@
         worker.postMessage({ type: 'load', rate: context.sampleRate });
       });
       if (this.stopped) return;
-      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.18.22', document.baseURI));
+      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.18.23', document.baseURI));
       if (this.stopped) return;
       this.node = new AudioWorkletNode(context, 'beat-this-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       this.node.port.onmessage = ({ data }) => {
         if (this.stopped) return;
+        if(data.discontinuity) this.inputLevel.reset();
+        this.onInput(this.inputLevel.observe(data.pcm,data.sampleRate ?? context.sampleRate));
         // A bounded queue; never silently skip audio and retain a false phase.
         if (this.pending >= 256) { this.fail('音声処理が追いつきません'); return; }
         this.pending++; worker.postMessage({ type: 'pcm', pcm: data.pcm,

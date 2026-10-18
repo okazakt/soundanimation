@@ -1,7 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {Tracker}=require('../beat-this-rhythm.js');
-const {normalize,Resampler}=require('../beat-this-audio.js');
+const {normalize,Resampler,AutoLevel}=require('../beat-this-audio.js');
 function probabilities(start,duration,meter=4,miss=-1) {
   const beatConfidence=new Float32Array(duration*50+1), downbeatConfidence=new Float32Array(beatConfidence.length);
   for(let i=0;i<beatConfidence.length;i++) {
@@ -40,7 +40,7 @@ test('silence resets probability history and meter, uniform downbeat confidence 
 test('noise gate precedes gain and peak limiting preserves waveform ratios',()=>{
   const silent=new Float32Array(22050).fill(.001);assert.equal(normalize(silent).quiet,true);assert.ok(silent.every(x=>x===0));
   const pcm=Float32Array.of(.01,-.02,.03,-.04),n=normalize(pcm);
-  assert.ok(n.gain<=128);assert.ok(Math.abs((pcm[3]-pcm[2])/(pcm[1]-pcm[0])-7/3)<1e-5);
+  assert.ok(Number.isFinite(n.gain));assert.ok(Math.abs((pcm[3]-pcm[2])/(pcm[1]-pcm[0])-7/3)<1e-5);
 });
 test('resampling is independent of input block boundaries and rejects high frequency aliasing',()=>{
   const input=Float32Array.from({length:48000},(_,i)=>Math.sin(2*Math.PI*14000*i/48000));
@@ -50,16 +50,46 @@ test('resampling is independent of input block boundaries and rejects high frequ
   assert.ok(Math.sqrt(whole.slice(100).reduce((s,x)=>s+x*x,0)/(whole.length-100))<.05);
 });
 
-for (const rms of [.0001, .001, .0012, .01, .1, .5]) test(`microphone RMS ${rms} reaches inference with finite unclipped normalization`,()=>{
+for (const rms of [1e-8, .000001, .0001, .001, .0012, .01, .1, .5]) test(`microphone RMS ${rms} reaches inference with finite unclipped normalization`,()=>{
   const pcm=Float32Array.from({length:22050},(_,i)=>Math.SQRT2*rms*Math.sin(2*Math.PI*100*i/22050));
   const n=normalize(pcm);
   assert.equal(n.quiet,false);assert.ok(n.gain>0);
   const actualRms=Math.sqrt(pcm.reduce((s,x)=>s+x*x,0)/pcm.length);
-  assert.ok(Math.abs(actualRms-Math.min(.1,rms*128))<1e-6);
+  assert.ok(Math.abs(actualRms-.1)<1e-6);
   assert.ok(pcm.every(x=>Number.isFinite(x)&&Math.abs(x)<=.951));
 });
-test('digital silence, DC offset and subthreshold noise do not become amplified ghost beats',()=>{
-  for (const pcm of [new Float32Array(22050),new Float32Array(22050).fill(.001),Float32Array.from({length:22050},(_,i)=>Math.sin(i)*.000001)]) {
+test('digital silence and DC offset remain silent at any adaptive gain',()=>{
+  for (const pcm of [new Float32Array(22050),new Float32Array(22050).fill(.001)]) {
     assert.equal(normalize(pcm).quiet,true);assert.ok(pcm.every(x=>x===0));
   }
+});
+
+test('adaptive window normalization is invariant to recording level and recovers after loud input',()=>{
+  const original=Float32Array.from({length:22050},(_,i)=>(1+Math.sin(i*.0007))*(Math.sin(i*.07)*.2+Math.cos(i*.011)*.1));
+  const base=original.slice();normalize(base);
+  for(const scale of [1e-6,.0001,.01,1,10]) {
+    const pcm=Float32Array.from(original,x=>x*scale);const n=normalize(pcm);
+    assert.equal(n.quiet,false);assert.ok(n.adjustedRms>.002);
+    assert.ok(pcm.every((x,i)=>Math.abs(x-base[i])<1e-6));
+  }
+});
+test('continuous level control attenuates loud sounds immediately and reacquires very quiet input',()=>{
+  const level=new AutoLevel(), block=rms=>Float32Array.from({length:2205},(_,i)=>Math.SQRT2*rms*Math.sin(2*Math.PI*100*i/22050));
+  let s=level.observe(block(.00001),22050);assert.ok(s.gain>1000);assert.equal(s.quiet,false);
+  s=level.observe(block(.3),22050);assert.ok(s.gain<1);assert.ok(s.adjustedRms<=.100001);
+  for(let i=0;i<8;i++) s=level.observe(block(.00001),22050);
+  assert.ok(s.gain>1000);assert.equal(s.quiet,false);
+  s=level.observe(new Float32Array(2205),22050);assert.equal(s.quiet,true);
+});
+test('coherent weaker neural peaks survive while low model evidence and irregular timing stay uncertain',()=>{
+  const regular=probabilities(0,8);
+  regular.beatConfidence=Float32Array.from(regular.beatConfidence,x=>x*.3);
+  regular.downbeatConfidence.fill(0);
+  const s=new Tracker().summarize(regular,0,8);
+  assert.equal(s.bpm,120);assert.ok(s.confidence>.55);
+  regular.beatConfidence=Float32Array.from(regular.beatConfidence,x=>x*.1);
+  assert.equal(new Tracker().summarize(regular,0,8).confidence,0);
+  const irregular={beatConfidence:new Float32Array(401),downbeatConfidence:new Float32Array(401)};
+  for(const t of [1,1.32,2.2,2.9,4,4.4,5.4,5.72,6.6]) irregular.beatConfidence[Math.round(t*50)]=.9;
+  assert.ok(new Tracker().summarize(irregular,0,8).confidence<.55);
 });

@@ -28,27 +28,46 @@
       const drop = Math.max(0, Math.floor(this.position) - 16); this.buffer = next.slice(drop); this.totalDropped += drop; this.position = 16 + this.totalOutput * this.ratio - this.totalDropped; return out.subarray(0, count);
     }
   }
-  function normalize(pcm) {
-    // Remove DC before measuring: a small constant offset is not musical input.
+  function measure(pcm) {
     let mean = 0;
     for (const x of pcm) mean += x;
     mean /= Math.max(1, pcm.length);
     let power = 0, peak = 0;
-    for (let i = 0; i < pcm.length; i++) {
-      pcm[i] -= mean;
-      power += pcm[i]*pcm[i]; peak = Math.max(peak, Math.abs(pcm[i]));
-    }
-    const rms = Math.sqrt(power / Math.max(1, pcm.length));
-    // Only skip near-digital silence (-100 dBFS). Microphone music at RMS .001
-    // is valid input, not silence. Model confidence decides whether it has beats.
-    const quiet = rms < .00001;
-    // Low-level iPhone input needs about 100x gain, not the previous 8x cap.
-    // One gain per context preserves accents and the peak cap prevents clipping.
-    const gain = quiet ? 0 : Math.min(128, .1 / rms, .95 / Math.max(peak, 1e-9));
-    for (let i = 0; i < pcm.length; i++) pcm[i] *= gain;
-    return { quiet, rms, gain };
+    for (const x of pcm) { const v=x-mean; power+=v*v; peak=Math.max(peak,Math.abs(v)); }
+    return { mean, rms:Math.sqrt(power/Math.max(1,pcm.length)), peak };
   }
-  const api = { Resampler, normalize };
+  // The threshold lives in the adjusted domain, never in raw microphone units.
+  const TARGET_RMS=.1, ADJUSTED_SILENCE=.002;
+  function normalize(pcm) {
+    const {mean,rms,peak}=measure(pcm);
+    const gain=peak>0 ? Math.min(TARGET_RMS/rms,.95/peak) : 0;
+    const adjustedRms=rms*gain;
+    const quiet=adjustedRms<ADJUSTED_SILENCE;
+    for(let i=0;i<pcm.length;i++) pcm[i]=quiet ? 0 : (pcm[i]-mean)*gain;
+    return {quiet,rms,gain:quiet?0:gain,adjustedRms};
+  }
+  // Fast attenuation, gradual gain increase, and reacquisition of a quieter scene.
+  // Used by the visual analyser as well as input status; inference retains one
+  // constant gain over its whole context so it cannot flatten musical accents.
+  class AutoLevel {
+    constructor() { this.reset(); }
+    reset() { this.reference=0; this.lowFor=0; }
+    observe(pcm,rate) {
+      const {rms,peak}=measure(pcm),dt=pcm.length/rate;
+      if(rms>0) {
+        if(!this.reference || rms>this.reference) this.reference=rms;
+        else {
+          this.lowFor=rms<this.reference*.1 ? this.lowFor+dt : 0;
+          this.reference=this.lowFor>.3 ? rms : rms+(this.reference-rms)*Math.exp(-dt/1.2);
+          if(this.lowFor>.3) this.lowFor=0;
+        }
+      }
+      const gain=peak>0 ? Math.min(TARGET_RMS/this.reference,.95/peak) : 0;
+      const adjustedRms=rms*gain;
+      return {rms,gain,adjustedRms,quiet:adjustedRms<ADJUSTED_SILENCE};
+    }
+  }
+  const api = { Resampler, normalize, AutoLevel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BeatThisAudio = api;
 })(typeof self === 'undefined' ? globalThis : self);

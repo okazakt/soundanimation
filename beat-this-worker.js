@@ -1,8 +1,8 @@
 // MIT-licensed Beat This! browser port. See vendor/beat-this/NOTICE.md.
 import { createBeatThis } from './vendor/beat-this/beat-this-cpu.mjs';
-import './beat-this-audio.js?v=2026.10.18.22';
-import './beat-this-rhythm.js?v=2026.10.18.22';
-import './model-assets.js?v=2026.10.18.22';
+import './beat-this-audio.js?v=2026.10.18.23';
+import './beat-this-rhythm.js?v=2026.10.18.23';
+import './model-assets.js?v=2026.10.18.23';
 const RATE = 22050, CAPACITY = RATE * 8;
 let tracker, resampler, ring = new Float32Array(CAPACITY), written = 0, total = 0;
 let inputRate = RATE, inputSamples = 0, expectedInputTime = null, timeline = 0, resyncCount = 0;
@@ -55,7 +55,7 @@ async function analyze() {
     if (epoch !== timeline) return; // A discontinuity invalidates in-flight predictions.
     if (processingMs > 10000) throw new Error('解析に10秒以上かかるため、この端末ではライブ推定を継続できません');
     const state = rhythmTracker.summarize(result, audioTime - length / RATE, length / RATE, levels.quiet);
-    self.postMessage({ type: 'result', state: { ...state, inputRms: levels.rms, inputGain: levels.gain, processingMs, provider, resyncCount, inputRate } });
+    self.postMessage({ type: 'result', state: { ...state, inputRms: levels.rms, inputGain: levels.gain, adjustedRms: levels.adjustedRms, processingMs, provider, resyncCount, inputRate } });
   } finally { busy = false; }
 }
 self.onmessage = async ({ data }) => {

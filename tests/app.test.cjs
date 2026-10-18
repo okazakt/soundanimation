@@ -30,6 +30,7 @@ function fixture(getMicrophone, options = {}) {
     async resume() { this.state = 'running'; }
     async suspend() { this.state = 'suspended'; }
     async close() { if (this.state !== 'closed') closed++; this.state = 'closed'; }
+    createGain() { return { gain: { value: 1, cancelScheduledValues() {}, setValueAtTime() {}, setTargetAtTime() {} }, connect() {}, disconnect() {} }; }
     createAnalyser() { return { frequencyBinCount: 2048, getByteFrequencyData(data) { if (options.spectrum) options.spectrum(data); else data.fill(100); } }; }
     createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
   }
@@ -175,7 +176,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.22'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.23'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -830,4 +831,25 @@ test('page setup blocks microphone access and start until model preparation comp
 test('high density displays cap canvas backing storage at DPR 2', () => {
   const f = fixture(async stream => stream, { dpr: 3, width: 390, height: 844 });
   assert.equal(f.nodes['#canvas'].width, 780); assert.equal(f.nodes['#canvas'].height, 1688);
+});
+test('fresh neural beats on adaptively audible low input are not vetoed by a raw silent spectrum',async()=>{
+  const clients=[];
+  class FakeBeatThis {
+    constructor(emit,status,storage,input) { this.emit=emit;this.input=input;clients.push(this); }
+    async start() {}
+    stop() {this.stopped=true;}
+  }
+  const f=fixture(async stream=>stream,{width:8,height:8,spectrum:data=>data.fill(0),beatThisClient:FakeBeatThis});
+  await f.nodes['#start'].click();await flush();
+  f.inspect().audio.currentTime=20;
+  clients[0].input({rms:.00001,gain:10000,adjustedRms:.1,quiet:false});
+  clients[0].emit({time:8,audioTime:19,receivedAudioTime:20,lastBeatAudioTime:18.5,bpm:120,confidence:.9,quiet:0,beatCount:16,beatInBar:0,meter:0,meterConfidence:0,meterMass:[0,0,0],beatProbability:.6,downProbability:.1,processingMs:400,windowSeconds:8,inputRms:.00001,inputGain:10000,adjustedRms:.1});
+  await f.tick();
+  assert.equal(f.inspect().rhythm.engine,'beat-this');assert.equal(f.inspect().rhythm.bpm,120);
+  f.nodes['#audio-debug'].open=true;f.nodes['#audio-debug'].toggle();
+  assert.ok(!f.nodes['#debug-input'].textContent.includes('無音'));
+  clients[0].input({rms:0,gain:0,adjustedRms:0,quiet:true});
+  for(let i=0;i<50;i++) await f.tick(.02);
+  assert.equal(f.inspect().rhythm.engine,'basic');
+  f.nodes['#stop'].click();
 });

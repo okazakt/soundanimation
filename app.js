@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.22';
+  const VERSION = '2026.10.18.23';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -18,10 +18,11 @@
   const setupComplete = () => !window.ModelSetup || window.ModelSetup.complete;
   if (!setupComplete()) startButton.disabled = true;
   let beatThisStorageStatus = window.ModelSetup?.complete ? '端末に保存済み・再読み込み後も再利用' : 'Beat This!の保存状態を確認中';
+  let latestInputLevel = null;
   let aiActive = false, aiLastTick = -100, aiMotionScale = 1, aiMotionLimit = 1;
   const aiLabel = () => 'Beat This!';
   function resetBeatThis() {
-    beatThisClient?.stop(); beatThisClient = null; beatThisState = null;
+    beatThisClient?.stop(); beatThisClient = null; beatThisState = null; latestInputLevel = null;
     aiActive = false; aiLastTick = -100; aiMotionScale = aiMotionLimit = 1;
     beatThisStatus = `開始すると${aiLabel()}を準備します`;
     if (running && !demo && audio && source) beginBeatThis();
@@ -33,7 +34,16 @@
     const client = new Client(state => {
       if (token !== generation || client !== beatThisClient) return;
       beatThisState = state;
-    }, status => { if (token === generation && client === beatThisClient) beatThisStatus = status; }, storage => { if (token === generation && client === beatThisClient) beatThisStorageStatus = storage; });
+    }, status => { if (token === generation && client === beatThisClient) beatThisStatus = status; }, storage => { if (token === generation && client === beatThisClient) beatThisStorageStatus = storage; }, level => {
+      if (token !== generation || client !== beatThisClient) return;
+      latestInputLevel=level;
+      if(inputGainNode && audio) {
+        const param=inputGainNode.gain;
+        param.cancelScheduledValues(audio.currentTime);
+        if(level.gain<param.value) param.setValueAtTime(level.gain,audio.currentTime);
+        else param.setTargetAtTime(level.gain,audio.currentTime,.1);
+      }
+    });
     beatThisClient = client;
     client.start(audio, source).catch(error => {
       if (token !== generation || client !== beatThisClient) return;
@@ -45,9 +55,8 @@
     const period = state?.bpm ? 60 / state.bpm : .5;
     const fresh = state && Number.isFinite(now) && now - state.audioTime < 12 && now >= state.audioTime - .1 &&
       now - state.receivedAudioTime < 8;
-    const quiet = basicRhythm.quiet;
-    const supported = fresh && state.time > 2 && state.beatCount >= 6 && state.bpm >= 55 && state.bpm <= 200 &&
-      !state.quiet && quiet < Math.max(.6, period * 1.4) && now - state.lastBeatAudioTime < 12;
+    const supported = fresh && state.time >= 2 && state.beatCount >= 6 && state.bpm >= 55 && state.bpm <= 200 &&
+      !state.quiet && (!latestInputLevel || basicRhythm.quiet < Math.max(.6,period*1.4)) && now - state.lastBeatAudioTime < 12;
     aiActive = !!(!beatThisClient?.stopped && supported && state.confidence > (aiActive ? .3 : .55));
     if (!aiActive) { rhythm = basicRhythm; return; }
     const age = Math.max(0, now - state.lastBeatAudioTime), predicted = Math.floor(age / period), phase = age / period % 1;
@@ -60,7 +69,7 @@
     aiMotionScale = lerp(aiMotionScale, lerp(1, tempoSpeed, state.confidence), 1 - Math.exp(-dt / 1.2));
     aiMotionLimit = lerp(aiMotionLimit, clamp(tempoSpeed, .45, 1.65), 1 - Math.exp(-dt / 2));
     rhythm = { ...basicRhythm, engine: 'beat-this', bpm: state.bpm, period, confidence: state.confidence,
-      tracking: true, phase, pulse: Math.exp(-phase * 9), beat, beatCount: state.beatCount + predicted,
+      tracking: true, quiet: latestInputLevel?.quiet ? basicRhythm.quiet : 0, phase, pulse: Math.exp(-phase * 9), beat, beatCount: state.beatCount + predicted,
       lastBeat: basicRhythm.time - phase * period, nextBeat: basicRhythm.time + (1 - phase) * period,
       lastSupport: basicRhythm.time - age, evidence: Math.max(state.beatProbability, state.downProbability),
       meter, meterConfidence: state.meterConfidence, beatInBar,
@@ -241,7 +250,7 @@
     }
   }
   let width = 1, height = 1, running = false, starting = false, demo = false;
-  let audio = null, stream = null, source = null, analyser = null, bins = null, bands = [];
+  let audio = null, stream = null, source = null, inputGainNode = null, analyser = null, bins = null, bands = [];
   let environment = .15, elapsed = 0, previous = 0, frameId = 0, generation = 0;
   const signals = new Float32Array(N);
   const HISTORY_SIZE = 2048;
@@ -360,7 +369,8 @@
       stream = localStream;
       analyser = localAudio.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = .15;
       bins = new Uint8Array(analyser.frequencyBinCount);
-      source = localAudio.createMediaStreamSource(stream); source.connect(analyser);
+      source = localAudio.createMediaStreamSource(stream);
+      inputGainNode=localAudio.createGain(); source.connect(inputGainNode); inputGainNode.connect(analyser);
       // Intentionally do not connect the microphone to speakers.
       configureBands(); demo = false;
       stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => {
@@ -390,7 +400,7 @@
     ++generation; running = false; starting = false;
     cancelAnimationFrame(frameId);
     beatThisClient?.stop(); beatThisClient = null;
-    source?.disconnect(); source = null;
+    source?.disconnect(); source = null; inputGainNode?.disconnect(); inputGainNode=null;
     stream?.getTracks().forEach(track => track.stop()); stream = null;
     if (audio && audio.state !== 'closed') audio.close().catch(() => {});
     audio = null; analyser = null; bins = null;
@@ -615,7 +625,7 @@
       flux += Math.max(0, value-r.previous[i]); level += value; r.previous[i]=value;
     }
     flux /= N; level /= N;
-    r.quiet = level > .003 ? 0 : r.quiet+dt;
+    r.quiet = (latestInputLevel ? !latestInputLevel.quiet : level > .003) ? 0 : r.quiet+dt;
     if (flux > .006 && flux > r.fluxAverage*2.2+.002 && r.time-r.lastOnset > .19) {
       r.onset=true; r.lastOnset=r.time;
     }
@@ -730,7 +740,7 @@
     const r = rhythm, m = mood;
     // Brief inter-beat silence must not hide a clock that is still tracking.
     const bridging = running && r.tracking && r.quiet <= Math.max(.6, r.period * 1.4);
-    const audible = running && (rawEnergies.some(value => value > .015) || bridging);
+    const audible = running && ((latestInputLevel ? !latestInputLevel.quiet : rawEnergies.some(value => value > .015)) || bridging);
     const locked = audible && r.tracking && r.confidence > .3 && r.bpm > 0;
     const meterKnown = locked && r.meterConfidence > .5 && r.beatInBar > 0;
     // Lamps follow the actual beat clock every frame, independently of text refresh.
@@ -746,7 +756,7 @@
     const ai = beatThisState;
     const aiFresh = ai && audio && audio.currentTime - ai.audioTime < 12 && !beatThisClient?.stopped;
     set('ai', running && aiFresh ? `拍 ${pct(ai.beatProbability)} / 小節頭 ${pct(ai.downProbability)} · 解析 ${(ai.processingMs / 1000).toFixed(2)}秒 · 確定端 ${(audio.currentTime - ai.audioTime + .5).toFixed(1)}秒前` : '—');
-    set('comparison', aiFresh ? `入力RMS ${(ai.inputRms ?? 0).toFixed(4)} / 補正 ${(ai.inputGain ?? 0).toFixed(2)}倍` : '—');
+    set('comparison', aiFresh ? `入力RMS ${(ai.inputRms ?? 0).toExponential(2)} / 補正 ${(ai.inputGain ?? 0).toFixed(1)}倍 / 補正後 ${(ai.adjustedRms ?? 0).toFixed(3)}` : '—');
     set('input', !running ? '停止中' : `${demo ? 'デモ入力' : 'マイク入力'} · ${audible ? '解析中' : '無音／入力待ち'}`);
     set('tempo', locked ? `${r.bpm.toFixed(1)} BPM / ${(r.bpm / 60).toFixed(2)} BPS · 確かさ ${pct(r.confidence)}` : `— BPM / — BPS · ${audible ? '推定中' : '判定待ち'}`);
     set('tracking', locked ? `${(r.engine !== 'basic' || r.evidence > .35) && r.time - r.lastSupport < Math.max(.75, r.period * 1.5) ? '追従中' : '履歴で継続'} · 最終支持 ${Math.max(0, r.time - r.lastSupport).toFixed(1)}秒前` : '推定待ち');
