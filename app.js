@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.30';
+  const VERSION = '2026.10.18.31';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -983,7 +983,7 @@
       active: false, gate: false, pendingGate: null, pendingSince: 0, gateChangedAt: -10, safetyUntil: 0,
       exiting: false, exitStyle: id % 4, trail: [],
       mirrorType: 0, mirrorAlpha: 0, population: 0, colorShift: 0, beatTurn: 0, beatHue: 0,
-      danceX: 0, danceY: 0, danceSwirl: 0, danceAccent: 0, danceSpread: 1, danceEnergy: .5, danceLock: 0, danceOffsetX: 0, danceOffsetY: 0,
+      danceX: 0, danceY: 0, danceSwirl: 0, danceAccent: 0, danceSpread: 1, danceEnergy: .5, beatSpeed: 0, danceLock: 0, danceOffsetX: 0, danceOffsetY: 0,
       shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0, groove: 0,
       phaseSpeed: (.8 + (id % 5) * .16) * (.55 + hash(id, 0, 8020) * 1.1),
       speedScale: .55 + hash(id, 0, 8020) * 1.1,
@@ -1032,7 +1032,10 @@
   }
   function updateBeatExpression(f, dt) {
     f.danceEnergy=lerp(window.DanceMotion.energy(mood),f.danceEnergy,Math.exp(-dt/1.2));
-    // The beat clock affects sphere size only, never position, colour or speed.
+    // A scalar speed envelope preserves direction and has no positional kick.
+    const drive=rhythm.tracking?Math.exp(-clamp(rhythm.phase,0,1)*6)*clamp(rhythm.confidence,0,1):0;
+    f.beatSpeed=lerp(drive,f.beatSpeed,Math.exp(-dt/(drive>f.beatSpeed?.35:.7)));
+    // No beat-driven offset, turning, orbit radius or colour accent.
     f.danceX=f.danceY=f.danceSwirl=f.danceAccent=f.danceOffsetX=f.danceOffsetY=f.beatTurn=f.beatHue=f.danceLock=0;
     f.danceSpread=1;
   }
@@ -1133,7 +1136,7 @@
       f.motionLevel = lerp(f.level, f.motionLevel, Math.exp(-dt / 2.5));
       f.motionPulse = lerp(f.pulse, f.motionPulse, Math.exp(-dt / .12));
       // Travel follows the slowly changing sound level and mood, not beat phase.
-      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25) * f.speedScale * (.80+f.danceEnergy*.36);
+      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25) * f.speedScale * (.80+f.danceEnergy*.36) * (1+f.beatSpeed*.3);
       f.phaseSpeed = lerp(speedTarget, f.phaseSpeed, Math.exp(-dt / .5));
       f.phase += dt * f.phaseSpeed;
       const t = f.phase;
@@ -1246,7 +1249,7 @@
         }
         if (neighbours) { alignX /= neighbours; alignY /= neighbours; }
         const speed = (50 + f.motionLevel * 65) * f.speedScale *
-          (.75 + p.tint * .5) * Math.min(width, height) / 390 * (.80+f.danceEnergy*.36);
+          (.75 + p.tint * .5) * Math.min(width, height) / 390 * (.80+f.danceEnergy*.36) * (1+f.beatSpeed*.3);
         const rotation = f.id % 2 ? -1 : 1;
         // These are velocity fields evaluated at the particle's CURRENT
         // position. No particle is assigned an angle or a place on a shape.
@@ -1377,6 +1380,37 @@
       from = { ...end, age: control.age };
     }
   }
+  function drawBeatRadiation() {
+    const lock=(focus.breath.gain || 0)*clamp(rhythm.confidence,0,1);
+    if(lock<.02 || !rhythm.tracking || !rhythm.period || rhythm.confidence<.1) return;
+    const drive=window.DanceMotion.energy(mood), size=Math.min(width,height);
+    // Fixed bounded cohorts derived from the compensated beat clock: drawing
+    // delay never becomes the start time of a new outward wave.
+    for(let back=0;back<4;back++) {
+      const age=(back+rhythm.phase)*rhythm.period;
+      if(age>1.35 || rhythm.beatCount<back) continue;
+      const meterKnown=rhythm.meterConfidence>.6 && rhythm.beatInBar>0 && (rhythm.meter===3 || rhythm.meter===4);
+      const position=meterKnown ? (rhythm.beatInBar-1-back+rhythm.meter*4)%rhythm.meter : -1;
+      const down=position===0, count=down ? 24 : 7;
+      const attack=clamp(age/.07,0,1);
+      const envelope=attack*attack*(3-2*attack)*(1-age/1.35)**2;
+      const weight=down?1:.42;
+      for(let i=0;i<count;i++) {
+        const angle=i*Math.PI*2/count+(rhythm.beatCount-back)*.47;
+        const variation=.78+.22*Math.sin(i*2.7+rhythm.beatCount-back)**2;
+        const radius=size*(.22+.22*drive)*age*variation;
+        const x=focus.x+Math.cos(angle)*radius, y=focus.y+Math.sin(angle)*radius;
+        const r=(2+(i%4)*.9)*(down?1.2:1);
+        const hue=(i*137.5+mood.warmth*35+rhythm.beatCount*9)%360;
+        ctx.globalAlpha=lock*envelope*weight*(.35+.55*drive);
+        const glow=r*4;
+        ctx.drawImage(glows[i%glows.length][1],x-glow,y-glow,glow*2,glow*2);
+        ctx.fillStyle=`hsl(${hue},80%,78%)`;
+        ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();
+      }
+    }
+    ctx.globalAlpha=1;
+  }
   function drawFlocks() {
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
     const hue=285-backgroundTone*135-mood.warmth*mood.confidence*22+(1-mood.activity)*10;
@@ -1387,6 +1421,7 @@
 
     ctx.globalCompositeOperation = 'lighter';
     drawFocusPoints();
+    drawBeatRadiation();
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
       const colour = particleColour(p, f), hue = colour.hue;
