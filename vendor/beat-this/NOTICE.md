@@ -21,11 +21,13 @@ Runtime: ONNX Runtime Web 1.23.2, Microsoft, MIT (ONNXRUNTIME-LICENSE.txt,
 ONNXRUNTIME-NOTICES.txt); fft.js 4.0.4, Fedor Indutny, MIT (FFT-LICENSE.txt).
 Original and port copyright notices and MIT terms: LICENSE.
 
-App adaptations: bounded rolling microphone buffer, existing anti-aliasing
-resampler from the BeatNet integration (CC BY 4.0; ../beatnet/NOTICE.md),
-8-second initial collection, up to 16-second noncausal windows, at least
-3 seconds between analyses, inferred tempo/meter and current phase prediction,
-CPU-only execution, cancellation, timing diagnostics and conventional fallback.
+App adaptations: 2–8 second rolling microphone windows, minimum 1 second
+between analyses, 0.5 second bilateral border cropping with absolute-time
+probability merging, max beat/downbeat head peak picking and 300ms NMS,
+3/4-meter phase voting with hysteresis, RMS normalization and silence gating.
+Streaming anti-aliasing resampler retained as a standalone utility from the
+former BeatNet integration (CC BY 4.0; ../audio-resampler/NOTICE.md).
+BeatNet inference/models and conventional rhythm fallback have been removed.
 These adaptations have not been evaluated on the paper's benchmarks. The
 published paper's accuracy does not describe this live experiment.
 

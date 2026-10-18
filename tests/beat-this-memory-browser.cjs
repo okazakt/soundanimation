@@ -34,7 +34,7 @@ function synthesize(file, meter) {
     try {
       res.setHeader('Content-Type', /\.m?js$/.test(file) ? 'text/javascript' : file.endsWith('.wasm') ? 'application/wasm' : file.endsWith('.css') ? 'text/css' : file.endsWith('.json') ? 'application/json' : /\.(onnx|f32)$/.test(file) ? 'application/octet-stream' : 'text/html');
       let data = fs.readFileSync(file);
-      if (file.endsWith('/app.js')) data = data.toString().replace('  resize();\n  if', '  window.beatNetTest = () => ({ beatNetState, beatNetStatus, aiActive, rhythm });\n  resize();\n  if');
+      if (file.endsWith('/app.js')) data = data.toString().replace('  resize();\n  if', '  window.beatThisTest = () => ({ beatThisState, beatThisStatus, aiActive, rhythm });\n  resize();\n  if');
       res.end(data);
     } catch { res.writeHead(404); res.end(); }
   });
@@ -57,10 +57,10 @@ function synthesize(file, meter) {
     page.on('pageerror', error => console.log('PAGEERROR', error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(() => window.ModelSetup?.complete, null, { timeout: 60000 }); await sample();
-    stage = 'load'; await page.selectOption('#analysis-engine', 'beat-this'); await page.click('#start');
-    await page.waitForFunction(() => window.beatNetTest().beatNetState?.time >= 8, null, { timeout: 60000 }); await sample();
+    stage = 'load';  await page.click('#start');
+    await page.waitForFunction(() => window.beatThisTest().beatThisState?.time >= 8, null, { timeout: 60000 }); await sample();
     stage = 'inference'; await page.waitForTimeout(Number(process.env.BEAT_THIS_DURATION_MS || 16000)); await sample();
-    console.log('MEMORY', JSON.stringify({ root, rendererPeakMiB: peak, state: await page.evaluate(() => ({ ...window.beatNetTest().beatNetState, canvasWidth: document.querySelector('#canvas').width, status: window.beatNetTest().beatNetStatus })) }));
-    assert.ok(await page.evaluate(() => window.beatNetTest().beatNetState?.bpm > 0)); await page.click('#stop');
+    console.log('MEMORY', JSON.stringify({ root, rendererPeakMiB: peak, state: await page.evaluate(() => ({ ...window.beatThisTest().beatThisState, canvasWidth: document.querySelector('#canvas').width, status: window.beatThisTest().beatThisStatus })) }));
+    assert.ok(await page.evaluate(() => window.beatThisTest().beatThisState?.bpm > 0)); await page.click('#stop');
   } finally { clearInterval(timer); await browser.close(); server.close(); fs.rmSync(temporary, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

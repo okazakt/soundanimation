@@ -1,16 +1,17 @@
 // MIT-licensed Beat This! browser port. See vendor/beat-this/NOTICE.md.
 import { createBeatThis } from './vendor/beat-this/beat-this-cpu.mjs';
-import './beatnet-core.js?v=2026.10.18.20';
-import './beat-this-rhythm.js?v=2026.10.18.20';
-import './model-assets.js?v=2026.10.18.20';
-const RATE = 22050, CAPACITY = RATE * 16;
+import './beat-this-audio.js?v=2026.10.18.21';
+import './beat-this-rhythm.js?v=2026.10.18.21';
+import './model-assets.js?v=2026.10.18.21';
+const RATE = 22050, CAPACITY = RATE * 8;
 let tracker, resampler, ring = new Float32Array(CAPACITY), written = 0, total = 0;
 let inputRate = RATE, inputSamples = 0, expectedInputTime = null, timeline = 0, resyncCount = 0;
 let end = 0, lastRun = 0, busy = false, scheduledTimer = null, provider = 'wasm';
+const rhythmTracker = new self.BeatThisRhythm.Tracker();
 const status = message => self.postMessage({ type: 'status', message });
 async function load(rate) {
   inputRate = rate;
-  resampler = new self.BeatNetCore.Resampler(rate);
+  resampler = new self.BeatThisAudio.Resampler(rate);
   status('モデル読込 0%');
   const file = self.ModelAssets.FILES[0];
   const response = await fetch(self.ModelAssets.url(file, self.location.href));
@@ -48,11 +49,13 @@ async function analyze() {
   pcm.set(ring.subarray(begin, begin + first)); if (first < length) pcm.set(ring.subarray(0, length - first), first);
   const audioTime = end, started = performance.now();
   try {
-    const result = await tracker.analyze(pcm), processingMs = performance.now() - started;
+    const levels = self.BeatThisAudio.normalize(pcm);
+    const result = levels.quiet ? { beatConfidence: [], downbeatConfidence: [] } : await tracker.analyze(pcm);
+    const processingMs = performance.now() - started;
     if (epoch !== timeline) return; // A discontinuity invalidates in-flight predictions.
     if (processingMs > 10000) throw new Error('解析に10秒以上かかるため、この端末ではライブ推定を継続できません');
-    const state = self.BeatThisRhythm.summarize(result, audioTime - length / RATE, length / RATE);
-    self.postMessage({ type: 'result', state: { ...state, processingMs, provider, resyncCount, inputRate } });
+    const state = rhythmTracker.summarize(result, audioTime - length / RATE, length / RATE, levels.quiet);
+    self.postMessage({ type: 'result', state: { ...state, inputRms: levels.rms, inputGain: levels.gain, processingMs, provider, resyncCount, inputRate } });
   } finally { busy = false; }
 }
 self.onmessage = async ({ data }) => {
@@ -67,8 +70,8 @@ self.onmessage = async ({ data }) => {
       // iOS input interruptions / route-rate changes can shift the source clock.
       // Clear old phase/history and collect again instead of permanently failing.
       if (data.discontinuity || rate !== inputRate || Math.abs(gap) > .02) {
-        inputRate = rate; resampler = new self.BeatNetCore.Resampler(rate);
-        written = total = inputSamples = 0; timeline++; resyncCount++;
+        inputRate = rate; resampler = new self.BeatThisAudio.Resampler(rate);
+        written = total = inputSamples = 0; timeline++; resyncCount++; rhythmTracker.reset();
         if (scheduledTimer !== null) { clearTimeout(scheduledTimer); scheduledTimer = null; busy = false; }
         lastRun = -Infinity;
         self.postMessage({ type: 'resync', gapMs: gap * 1000, rate, count: resyncCount });
@@ -81,9 +84,9 @@ self.onmessage = async ({ data }) => {
       // newest capture timestamp rather than accumulating clock differences.
       end = expectedInputTime - (inputSamples / inputRate - total / RATE);
       self.postMessage({ type: 'ack' });
-      if (!busy && total >= RATE * 8 && end - lastRun >= 3) {
+      if (!busy && total >= RATE * 2 && end - lastRun >= 1) {
         // Let queued capture messages drain before taking the newest window.
-        // Otherwise CPU inference slower than 3s would repeatedly analyze old
+        // Otherwise CPU inference slower than the hop would repeatedly analyze old
         // snapshots and build an ever-growing lag despite a bounded ring.
         busy = true;
         scheduledTimer = setTimeout(() => analyze().catch(error => self.postMessage({ type: 'error', message: error.message })), 50);

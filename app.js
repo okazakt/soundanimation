@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.20';
+  const VERSION = '2026.10.18.21';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -13,49 +13,42 @@
   const microphoneDialog = document.querySelector('#microphone-dialog');
   const microphoneChoices = document.querySelector('#microphone-choices');
   const microphonePrompt = document.querySelector('#microphone-prompt');
-  const engineSelect = document.querySelector('#analysis-engine');
-  let beatNetClient = null, beatNetState = null, beatNetStatus = '開始するとBeatNetを準備します';
+
+  let beatThisClient = null, beatThisState = null, beatThisStatus = '開始するとBeat This!を準備します';
   const setupComplete = () => !window.ModelSetup || window.ModelSetup.complete;
   if (!setupComplete()) startButton.disabled = true;
   let beatThisStorageStatus = window.ModelSetup?.complete ? '端末に保存済み・再読み込み後も再利用' : 'Beat This!の保存状態を確認中';
   let aiActive = false, aiLastTick = -100, aiMotionScale = 1, aiMotionLimit = 1;
-  const isBeatThis = () => engineSelect.value === 'beat-this';
-  const aiLabel = () => isBeatThis() ? 'Beat This!' : 'BeatNet';
-  const wantsBeatNet = () => engineSelect.value !== 'basic';
-  function resetBeatNet() {
-    beatNetClient?.stop(); beatNetClient = null; beatNetState = null;
+  const aiLabel = () => 'Beat This!';
+  function resetBeatThis() {
+    beatThisClient?.stop(); beatThisClient = null; beatThisState = null;
     aiActive = false; aiLastTick = -100; aiMotionScale = aiMotionLimit = 1;
-    beatNetStatus = wantsBeatNet() ? `開始すると${aiLabel()}を準備します` : '従来方式';
-    if (running && !demo && audio && source) beginBeatNet();
+    beatThisStatus = `開始すると${aiLabel()}を準備します`;
+    if (running && !demo && audio && source) beginBeatThis();
   }
-  function beginBeatNet() {
-    if (!wantsBeatNet()) return;
-    const Client = isBeatThis() ? window.BeatThisClient : window.BeatNetClient;
-    if (!Client) { beatNetStatus = `${aiLabel()}未対応・従来方式で継続`; return; }
+  function beginBeatThis() {
+    const Client = window.BeatThisClient;
+    if (!Client) { beatThisStatus = `${aiLabel()}未対応・リズム判定を停止`; return; }
     const token = generation;
     const client = new Client(state => {
-      if (token !== generation || client !== beatNetClient) return;
-      beatNetState = state;
-      if (!state) return;
-      if (isBeatThis()) return;
-      beatNetStatus = state.time > 2 && state.beatCount >= 6 && state.confidence > .55 ? '解析中' : '解析中・拍の学習待ち';
-    }, status => { if (token === generation && client === beatNetClient) beatNetStatus = status; }, storage => { if (token === generation && client === beatNetClient) beatThisStorageStatus = storage; });
-    beatNetClient = client;
+      if (token !== generation || client !== beatThisClient) return;
+      beatThisState = state;
+    }, status => { if (token === generation && client === beatThisClient) beatThisStatus = status; }, storage => { if (token === generation && client === beatThisClient) beatThisStorageStatus = storage; });
+    beatThisClient = client;
     client.start(audio, source).catch(error => {
-      if (token !== generation || client !== beatNetClient) return;
-      beatNetStatus = `${error.message}・従来方式で継続`; client.stop();
+      if (token !== generation || client !== beatThisClient) return;
+      beatThisStatus = `${error.message}・リズム判定を停止`; client.stop();
     });
   }
   function selectRhythmEngine(dt) {
-    const state = beatNetState, now = audio?.currentTime;
+    const state = beatThisState, now = audio?.currentTime;
     const period = state?.bpm ? 60 / state.bpm : .5;
-    const delayed = isBeatThis();
-    const fresh = state && Number.isFinite(now) && now - state.audioTime < (delayed ? 12 : .75) && now >= state.audioTime - .1 &&
-      (!delayed || now - state.receivedAudioTime < 8);
-    const quiet = delayed ? basicRhythm.quiet : state?.quiet;
-    const supported = fresh && state.time > 2 && state.beatCount >= 6 && state.bpm >= 55 && state.bpm <= 215 &&
-      quiet < Math.max(.6, period * 1.4) && now - state.lastBeatAudioTime < (delayed ? 12 : 8);
-    aiActive = !!(wantsBeatNet() && !beatNetClient?.stopped && supported && state.confidence > (aiActive ? .3 : .55));
+    const fresh = state && Number.isFinite(now) && now - state.audioTime < 12 && now >= state.audioTime - .1 &&
+      now - state.receivedAudioTime < 8;
+    const quiet = basicRhythm.quiet;
+    const supported = fresh && state.time > 2 && state.beatCount >= 6 && state.bpm >= 55 && state.bpm <= 200 &&
+      !state.quiet && quiet < Math.max(.6, period * 1.4) && now - state.lastBeatAudioTime < 12;
+    aiActive = !!(!beatThisClient?.stopped && supported && state.confidence > (aiActive ? .3 : .55));
     if (!aiActive) { rhythm = basicRhythm; return; }
     const age = Math.max(0, now - state.lastBeatAudioTime), predicted = Math.floor(age / period), phase = age / period % 1;
     const tick = state.lastBeatAudioTime + predicted * period;
@@ -66,15 +59,14 @@
     const tempoSpeed = clamp(Math.pow(state.bpm / 120, 1.2), .5, 1.65);
     aiMotionScale = lerp(aiMotionScale, lerp(1, tempoSpeed, state.confidence), 1 - Math.exp(-dt / 1.2));
     aiMotionLimit = lerp(aiMotionLimit, clamp(tempoSpeed, .45, 1.65), 1 - Math.exp(-dt / 2));
-    rhythm = { ...basicRhythm, engine: delayed ? 'beat-this' : 'beatnet', bpm: state.bpm, period, confidence: state.confidence,
+    rhythm = { ...basicRhythm, engine: 'beat-this', bpm: state.bpm, period, confidence: state.confidence,
       tracking: true, phase, pulse: Math.exp(-phase * 9), beat, beatCount: state.beatCount + predicted,
       lastBeat: basicRhythm.time - phase * period, nextBeat: basicRhythm.time + (1 - phase) * period,
       lastSupport: basicRhythm.time - age, evidence: Math.max(state.beatProbability, state.downProbability),
       meter, meterConfidence: state.meterConfidence, beatInBar,
       motionScale: aiMotionScale, motionLimitScale: aiMotionLimit };
   }
-  engineSelect.addEventListener('change', () => { resetBeatNet(); rhythm = basicRhythm; updateDebug(true); });
-  const microphoneConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  const microphoneConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, sampleRate: 22050 };
   let selectedMicrophone = null, selectionRequired = false, pickerGeneration = 0;
   let resumeAfterSelection = false;
   let microphonePickerReason = '';
@@ -257,7 +249,7 @@
   const historyTimes = new Float64Array(HISTORY_SIZE);
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
-    prepareFlocks(); resetRhythm(); resetMood(); resetSoundProfile(); resetBeatNet();
+    prepareFlocks(); resetRhythm(); resetMood(); resetSoundProfile(); resetBeatThis();
     rawEnergies.fill(0); energies.fill(0);
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
@@ -389,7 +381,7 @@
     starting = false; running = true; startButton.textContent = '開始';
     microphoneButton.disabled = false;
     intro.classList.add('hidden'); previous = 0;
-    if (!demo) beginBeatNet(); else beatNetStatus = 'デモ入力・従来方式';
+    if (!demo) beginBeatThis(); else beatThisStatus = 'デモ入力・リズム判定なし';
     acquireWake(); frameId = requestAnimationFrame(frame);
   }
   function stop() {
@@ -397,7 +389,7 @@
     ++pickerGeneration;
     ++generation; running = false; starting = false;
     cancelAnimationFrame(frameId);
-    beatNetClient?.stop(); beatNetClient = null;
+    beatThisClient?.stop(); beatThisClient = null;
     source?.disconnect(); source = null;
     stream?.getTracks().forEach(track => track.stop()); stream = null;
     if (audio && audio.state !== 'closed') audio.close().catch(() => {});
@@ -613,325 +605,21 @@
       meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [] });
     rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = []; rhythm.featureHistory = [];
   }
-  // Beat-synchronous multiband novelty + harmonic change; keep weak beats
-  // and offbeat patterns as evidence instead of requiring a detected onset.
-  // Inspired by Krebs et al. (ISMIR 2016), using hand-built observations rather
-  // than their trained networks/DBN. Scores below are heuristics, not probabilities.
-  function trackMeter(features, time = rhythm.time, scale = 1) {
-    const r = rhythm;
-    if (!r.tracking || r.confidence < .25) return;
-    const offset = (time - (r.nextBeat - r.period)) / r.period;
-    const nearest = Math.round(offset), onBeat = Math.abs(offset - nearest) < .27;
-    const index = r.beatCount + (onBeat ? nearest : Math.floor(offset));
-    let observation = r.accents.find(a => a.index === index);
-    if (!observation) {
-      observation = { index, features: Array(8).fill(0), chroma: Array(12).fill(0) }; r.accents.push(observation);
-    }
-    const start = onBeat ? 0 : 4;
-    for (let k = 0; k < 4; k++) observation.features[start + k] += features[k] * scale;
-    for (let k = 0; k < 12; k++) observation.chroma[k] += features[k + 4] * scale;
-    r.accents = r.accents.filter(a => r.beatCount - a.index <= 48 && a.index <= r.beatCount + 1);
-  }
-  function meterObservationWeight(a, newest) {
-    // Missing percussion is weak evidence, not a strong contradictory accent.
-    const reliability = a.features[0] > .001 || a.features[3] > .001 ? 1 : .2;
-    return reliability * Math.exp((a.index - newest) / 14);
-  }
-  function meterModel(samples, meter) {
-    if (samples.length < meter * 3) return { fit: 0, offset: 0, channelFits: Array(8).fill(0), channelWeights: Array(8).fill(0) };
-    const newest = samples[samples.length - 1].index;
-    const counts = Array(meter).fill(0), weights = Array(meter).fill(0);
-    const sums = Array.from({ length: meter }, () => Array(8).fill(0));
-    for (const a of samples) {
-      const pos = ((a.index % meter) + meter) % meter, w = meterObservationWeight(a, newest);
-      counts[pos]++; weights[pos] += w;
-      a.features.forEach((v, k) => { sums[pos][k] += v * w; });
-    }
-    if (counts.some(n => n < 2)) return { fit: 0, offset: 0, channelFits: Array(8).fill(0), channelWeights: Array(8).fill(0) };
-    const means = sums.map((row, pos) => row.map(v => v / weights[pos]));
-    const channelWeights = [1, 1.2, .7, 1, .5, .6, .35, .5];
-    let score = 0, totalWeight = 0;
-    const salience = Array(meter).fill(0), channelFits = Array(8).fill(0), evidenceWeights = Array(8).fill(0);
-    for (let k = 0; k < 8; k++) {
-      let sum = 0, total = 0;
-      for (const a of samples) { const w = meterObservationWeight(a, newest); sum += a.features[k] * w; total += w; }
-      const mean = sum / total;
-      if (mean < .0005) continue;
-      let variance = 0, error = 0;
-      for (const a of samples) {
-        const w = meterObservationWeight(a, newest), pos = ((a.index % meter) + meter) % meter;
-        const v = a.features[k];
-        // Leave-one-out prediction rewards patterns repeating across bars,
-        // while random accents and overfitted short patterns lose evidence.
-        const prediction = (sums[pos][k] - v * w) / Math.max(.001, weights[pos] - w);
-        variance += w * (v - mean) ** 2; error += w * (v - prediction) ** 2;
-      }
-      const contrast = clamp(Math.sqrt(variance / total) / (mean + .002) / .4, 0, 1);
-      const fit = clamp(1 - error / Math.max(1e-8, variance), 0, 1);
-      const weight = channelWeights[k] * contrast;
-      channelFits[k] = fit; evidenceWeights[k] = weight * fit;
-      // A noisy/uninformative channel supplies little evidence; it should
-      // not veto a recurring bass or harmonic pattern in another channel.
-      score += weight * fit * fit; totalWeight += weight * fit;
-      if (k < 4) for (let pos = 0; pos < meter; pos++) {
-        const downbeatWeight = k === 1 || k === 3 ? 1.5 : k === 2 ? .25 : .7;
-        salience[pos] += fit * contrast * downbeatWeight * means[pos][k] / mean;
-      }
-    }
-    return { fit: totalWeight > .1 ? score / totalWeight : 0,
-      offset: salience.indexOf(Math.max(...salience)), channelFits, channelWeights: evidenceWeights };
-  }
-  function evaluateMeter() {
-    const r = rhythm, finished = r.beatCount - 1;
-    if (!r.tracking || finished <= r.meterLastEvaluated) return;
-    r.meterLastEvaluated = finished;
-    const samples = r.accents.filter(a => a.index <= finished).sort((a, b) => a.index - b.index);
-    // Harmonic changes compare beat-averaged chroma, suppressing the frame
-    // noise and percussion transients that dominate adjacent-frame differences.
-    for (let i = 1; i < samples.length; i++) {
-      if (samples[i].index - samples[i - 1].index !== 1) continue;
-      const a = samples[i - 1].chroma, b = samples[i].chroma;
-      let dot = 0, normA = 0, normB = 0;
-      for (let k = 0; k < 12; k++) { dot += a[k] * b[k]; normA += a[k] ** 2; normB += b[k] ** 2; }
-      if (normA > .001 && normB > .001) samples[i].features[3] = clamp(1 - dot / Math.sqrt(normA * normB), 0, 1) * .12;
-    }
-    const models = [3, 4].map(meter => ({ meter, ...meterModel(samples, meter) }));
-    const duple = meterModel(samples, 2);
-    // A repeating two-beat pattern alone cannot distinguish 2 from 4.
-    const four = models[1];
-    let uniqueFour = 0, fourWeight = 0;
-    for (let k = 0; k < 8; k++) {
-      const w = four.channelWeights[k];
-      uniqueFour += w * Math.max(0, four.channelFits[k] - duple.channelFits[k]); fourWeight += w;
-    }
-    four.fit *= clamp(uniqueFour / Math.max(.001, fourWeight) / .2, 0, 1);
-    for (let i = 0; i < 2; i++) r.meterScores[i] = lerp(r.meterScores[i], models[i].fit, .3);
-    const ranked = models.map((model, i) => ({ ...model, score: r.meterScores[i] }))
-      .sort((a, b) => b.score - a.score);
-    const best = ranked[0], margin = best.score - ranked[1].score;
-    r.meterFit = best.score; r.meterMargin = margin;
-    if (best.score > .45 && margin > .12) {
-      const candidate = `${best.meter}:${best.offset}`;
-      if (r.meterCandidate !== candidate) { r.meterCandidate = candidate; r.meterCandidateCount = 0; }
-      r.meterCandidateCount++;
-      const same = r.meter === best.meter && r.downbeatOffset === best.offset;
-      // A new meter/phase must win repeatedly; a fill cannot flip the bar clock.
-      if (same || r.meterCandidateCount >= (r.meterConfidence > .45 ? best.meter * 2 : 2)) {
-        const confidence = best.score * clamp(margin / .3, 0, 1);
-        r.meterConfidence = same ? lerp(r.meterConfidence, confidence, .2) : confidence * .75;
-        r.meter = best.meter; r.downbeatOffset = best.offset; r.meterLastSupport = r.time;
-        if (!same) r.meterTracking = false;
-        if (r.meterConfidence > .6) r.meterTracking = true;
-      }
-    } else {
-      r.meterCandidateCount = 0;
-      r.meterConfidence *= .97;
-    }
-  }
+  // Visual transient/level envelope only. Rhythm comes exclusively from Beat This!.
   function updateRhythm(dt) {
-    const r = rhythm;
+    const r = basicRhythm;
     r.time += dt; r.onset = false; r.beat = false;
-    let flux = 0, level = 0, bassFlux = 0, highFlux = 0;
-    const chroma = new Float64Array(12);
-    const maximum = audio ? Math.min(14000, audio.sampleRate / 2) : 14000;
-    if (r.pitchMaximum !== maximum) {
-      r.pitchMaximum = maximum;
-      r.pitchClasses = Array.from({ length: N }, (_, i) => {
-        const hz = 40 * Math.pow(maximum / 40, (i + .5) / N);
-        return hz >= 130 && hz <= 2200 ? ((Math.round(69 + 12 * Math.log2(hz / 440)) % 12) + 12) % 12 : -1;
-      });
-    }
-    for (let i = 0; i < N; i++) {
-      const weight = i < 205 ? 1.2 : i < 410 ? 1 : .7;
-      // Raw input prevents baseline adaptation from being mistaken for silence.
+    let flux = 0, level = 0;
+    for (let i=0; i<N; i++) {
       const value = Math.max(energies[i], rawEnergies[i]);
-      const novelty = Math.max(0, value - r.previous[i]);
-      flux += novelty * weight;
-      if (i < 170) bassFlux += novelty / 170;
-      if (i >= 340) highFlux += novelty / (N - 340);
-      const pitch = r.pitchClasses[i];
-      if (pitch >= 0) chroma[pitch] += value * value;
-      level += value; r.previous[i] = value;
+      flux += Math.max(0, value-r.previous[i]); level += value; r.previous[i]=value;
     }
     flux /= N; level /= N;
-    const norm = Math.sqrt(chroma.reduce((sum, v) => sum + v * v, 0));
-    const features = [flux, bassFlux, highFlux, 0, ...Array.from(chroma, value => norm ? value / norm : 0)];
-    const bucket = Math.floor(r.time * 20);
-    let history = r.featureHistory[r.featureHistory.length - 1];
-    if (!history || history.bucket !== bucket) {
-      history = { bucket, time: (bucket + .5) / 20, features: Array(16).fill(0) };
-      r.featureHistory.push(history);
+    r.quiet = level > .003 ? 0 : r.quiet+dt;
+    if (flux > .006 && flux > r.fluxAverage*2.2+.002 && r.time-r.lastOnset > .19) {
+      r.onset=true; r.lastOnset=r.time;
     }
-    for (let k = 0; k < 16; k++) history.features[k] += features[k] * dt;
-    r.featureHistory = r.featureHistory.filter(sample => r.time - sample.time < 12);
-    r.quiet = level > .003 ? 0 : r.quiet + dt;
-    const onset = flux > .006 && flux > r.fluxAverage * 2.2 + .002 && r.time - r.lastOnset > .19;
-    r.fluxAverage = lerp(flux, r.fluxAverage, Math.exp(-dt / .65));
-    const voteDecay = Math.exp(-dt / 5);
-    for (let bpm = 60; bpm <= 180; bpm++) r.votes[bpm] *= voteDecay;
-    r.events = r.events.filter(event => r.time - event.time < 12);
-    if (onset) {
-      r.onset = true; r.lastOnset = r.time;
-      for (let j = r.events.length - 1; j >= Math.max(0, r.events.length - 16); j--) {
-        const delta = r.time - r.events[j].time;
-        // Consecutive intervals get the most weight; longer spans bridge a
-        // missing kick. Multiple hypotheses cover half/double-tempo ambiguity.
-        for (let beats = 1; beats <= 8; beats++) {
-          const bpm = 60 * beats / delta;
-          if (bpm < 59 || bpm > 181) continue;
-          const weight = Math.exp(-delta / 4) / beats * (j === r.events.length - 1 ? 1.6 : .5);
-          const spread = Math.max(2, bpm * .03);
-          for (let bin = Math.max(60, Math.floor(bpm - spread * 2)); bin <= Math.min(180, Math.ceil(bpm + spread * 2)); bin++) {
-            r.votes[bin] += weight * Math.exp(-.5 * ((bin - bpm) / spread) ** 2);
-          }
-        }
-      }
-      r.events.push({ time: r.time, features, strength: flux });
-      let phaseSupport = 0;
-      if (r.tracking) {
-        let supporting = 0, total = 0;
-        for (const event of r.events.slice(-16)) {
-          const w = Math.sqrt(event.strength) * Math.exp((event.time - r.time) / 4);
-          const cycles = (event.time - r.nextBeat) / r.period;
-          supporting += w * (Math.abs(cycles - Math.round(cycles)) < .2 ? 1 : 0); total += w;
-        }
-        phaseSupport = supporting / Math.max(.001, total);
-        r.phaseCoherence = phaseSupport;
-        if (phaseSupport > .55) r.lastSupport = r.time;
-      }
-      let winner = 0, best = 0, runner = 0;
-      for (let bpm = 60; bpm <= 180; bpm++) {
-        const distance = r.bpm ? Math.log(bpm / r.bpm) : 10;
-        const prior = r.tracking ? 1 + .45 * Math.exp(-.5 * (distance / .075) ** 2) : 1;
-        const score = r.votes[bpm] * prior;
-        if (score > best) { best = score; winner = bpm; }
-      }
-      for (let bpm = 60; bpm <= 180; bpm++) if (Math.abs(bpm - winner) > Math.max(7, winner * .08)) {
-        const distance = r.bpm ? Math.log(bpm / r.bpm) : 10;
-        const prior = r.tracking ? 1 + .45 * Math.exp(-.5 * (distance / .075) ** 2) : 1;
-        runner = Math.max(runner, r.votes[bpm] * prior);
-      }
-      if (winner && r.events.length >= 4) {
-        const period = 60 / winner;
-        const recent = r.events.slice(-16);
-        let coherent = 0, totalWeight = 0;
-        for (const event of recent) {
-          const cycles = (r.time - event.time) / period;
-          const weight = Math.sqrt(event.strength) * Math.exp((event.time - r.time) / 6);
-          const distance = Math.abs(cycles - Math.round(cycles));
-          coherent += weight * (distance < .20 ? 1 : Math.abs(distance - .5) < .14 ? .7 : 0);
-          totalWeight += weight;
-        }
-        let certainty = clamp((best - runner) / Math.max(.01, best) * 2, 0, 1) *
-          clamp((coherent / Math.max(.001, totalWeight) - .55) / .4, 0, 1) * clamp((recent.length - 2) / 4, 0, 1);
-        {
-          if (!r.tempoCandidate || Math.abs(Math.log(winner / r.tempoCandidate)) > .04) {
-            r.tempoCandidate = winner; r.tempoCandidateSince = r.time; r.tempoCandidateCount = 0;
-          }
-          r.tempoCandidateCount++;
-          // Repeated moderate evidence for the same tempo can establish a
-          // clock even when subdivisions keep any single observation unsure.
-          const persistence = clamp((r.time - r.tempoCandidateSince - 2) / 4, 0, 1) * clamp((r.tempoCandidateCount - 6) / 8, 0, 1);
-          const regularity = clamp((coherent / Math.max(.001, totalWeight) - .62) / .18, 0, 1);
-          const separation = clamp(((best - runner) / Math.max(.01, best) - .06) / .16, 0, 1);
-          certainty = Math.max(certainty, .7 * persistence * regularity * separation);
-        }
-        const wasLocked = r.tracking;
-        r.evidence = certainty;
-        const supportedCertainty = wasLocked ? Math.max(certainty, clamp((phaseSupport - .4) / .5, 0, 1) * .85) : certainty;
-        r.confidence = lerp(r.confidence, supportedCertainty, wasLocked ? .08 : .4);
-        if (!r.tracking && r.confidence > .5) { r.tracking = true; r.lastSupport = r.time; }
-        const change = r.bpm ? Math.abs(Math.log(winner / r.bpm)) : 0;
-        if (wasLocked && change < .05 && certainty > .45) r.lastSupport = r.time;
-        if (wasLocked && change > .12 && certainty > .35) {
-          if (Math.abs(r.pendingTempo - winner) > winner * .06) {
-            r.pendingTempo = winner; r.pendingTempoSince = r.time; r.pendingTempoCount = 0;
-          }
-          r.pendingTempoCount++;
-        } else if (change <= .12) { r.pendingTempo = 0; r.pendingTempoCount = 0; }
-        const allowChange = !wasLocked || change <= .12 ||
-          (r.pendingTempoCount >= 4 && r.time - r.pendingTempoSince >= 2);
-        if (certainty > .3 && allowChange) {
-          // Median recent intervals ignore early/late individual hits and
-          // bridge missing beats, while following a gradual human tempo drift.
-          const intervals = [];
-          const aligned = recent.filter(event => {
-            const cycles = (event.time - r.nextBeat) / r.period;
-            return Math.abs(cycles - Math.round(cycles)) < .2;
-          });
-          const timingEvents = wasLocked && change <= .12 && aligned.length >= 4 ? aligned : recent;
-          const addInterval = gap => {
-            const beats = Math.max(1, Math.round(gap / period));
-            const sample = gap / beats;
-            if (Math.abs(sample - period) < period * .23) intervals.push(sample);
-          };
-          if (timingEvents === aligned) {
-            // Spans of several beats average out FFT/render-frame timing
-            // jitter; a single short interval must not bend a stable clock.
-            for (let i = 1; i < aligned.length; i++) for (let j = 0; j < i; j++) {
-              const gap = aligned[i].time - aligned[j].time;
-              if (gap >= period * 1.5 && gap <= period * 8.5) addInterval(gap);
-            }
-          } else for (let i = 1; i < timingEvents.length; i++) addInterval(timingEvents[i].time - timingEvents[i - 1].time);
-          intervals.sort((a, b) => a - b);
-          const middle = Math.floor(intervals.length / 2);
-          const median = intervals.length ? (intervals[middle] + intervals[Math.max(0, Math.ceil(intervals.length / 2) - 1)]) / 2 : period;
-          const candidate = lerp(winner, 60 / median, wasLocked && timingEvents === aligned ? .9 : .45);
-          const hadTempo = r.bpm > 0;
-          r.bpm = wasLocked ? lerp(r.bpm, candidate, .2) : candidate;
-          r.period = 60 / r.bpm;
-          if (!hadTempo) {
-            // Choose a strong recent onset as phase anchor; subdivisions must
-            // not restart the provisional clock on every observation.
-            const anchor = recent.reduce((best, event) => event.strength > best.strength ? event : best).time;
-            r.nextBeat = anchor + (Math.floor((r.time - anchor) / r.period) + 1) * r.period;
-          } else {
-            const nearest = r.nextBeat + Math.round((r.time - r.nextBeat) / r.period) * r.period;
-            const error = r.time - nearest;
-            if (Math.abs(error) < r.period * .27) r.nextBeat += clamp(error, -.085, .085) * .2;
-          }
-        }
-      }
-    }
-    const stale = r.time - r.lastSupport > 8;
-    const silent = r.quiet > (r.tracking ? Math.max(.6, r.period * 1.4) : .6);
-    // Acquisition and release have different thresholds. A poor single
-    // observation cannot erase a few bars of supporting history.
-    if (silent) r.confidence *= Math.exp(-dt / .45);
-    else if (r.tracking && !stale) r.confidence = Math.max(.38, r.confidence);
-    else if (r.time - r.lastOnset > 2 || (r.tracking && stale)) r.confidence *= Math.exp(-dt / 2);
-    if (r.tracking && r.confidence < .22) {
-      r.tracking = false; r.accents = []; r.meterCandidateCount = 0;
-      r.meterScores = [0, 0]; r.meter = 0; r.meterConfidence = 0; r.meterTracking = false;
-    }
-    if (r.tracking && r.confidence > .25 && !silent) {
-      while (r.nextBeat <= r.time) {
-        if (r.time - r.lastBeat > r.period * .6) { r.beat = true; r.lastBeat = r.nextBeat; r.beatCount++; }
-        r.nextBeat += r.period;
-      }
-      r.phase = ((r.time - (r.nextBeat - r.period)) / r.period + 1) % 1;
-      r.pulse = Math.exp(-r.phase * 9);
-      // Average novelty over sub-beat windows rather than trusting one noisy
-      // FFT peak. The bounded 20 Hz history also includes previously weak beats.
-      if (!r.accents.length) {
-        for (const sample of r.featureHistory) trackMeter(sample.features, sample.time, 4 / r.period);
-      } else trackMeter(features, r.time, 4 * dt / r.period);
-      evaluateMeter();
-    } else { r.pulse *= Math.exp(-dt / .18); }
-    if (!r.tracking && r.confidence < .03 && r.time - r.lastOnset > 3) {
-      r.bpm = 0; r.events = []; r.votes.fill(0);
-    }
-    if (r.meterTracking && !silent && r.time - r.meterLastSupport < 12) r.meterConfidence = Math.max(.55, r.meterConfidence);
-    if (silent) r.meterConfidence *= Math.exp(-dt / .5);
-    else if (r.time - r.meterLastSupport > 8) r.meterConfidence *= Math.exp(-dt / 10);
-    if (r.meterConfidence < .15 || !r.tracking) { r.beatInBar = 0; }
-    else r.beatInBar = ((r.beatCount - r.downbeatOffset) % r.meter + r.meter) % r.meter + 1;
-    const tempoSpeed = r.bpm ? clamp(Math.pow(r.bpm / 120, 1.2), .5, 1.65) : 1;
-    r.motionScale = lerp(lerp(1, tempoSpeed, r.confidence), r.motionScale, Math.exp(-dt / 1.2));
-    if (r.bpm && r.confidence > .45) { r.lastReliableBpm = r.bpm; r.lastReliableTime = r.time; }
-    const remembered = r.time - r.lastReliableTime < 15 ? r.lastReliableBpm : 0;
-    const ceiling = remembered ? clamp(Math.pow(remembered / 120, 1.2), .45, 1.65) : 1;
-    r.motionLimitScale = lerp(ceiling, r.motionLimitScale, Math.exp(-dt / 2));
+    r.fluxAverage=lerp(flux,r.fluxAverage,Math.exp(-dt/.65));
   }
 
   // Musical mood is a slow, uncertain audio-feature estimate, not a claim
@@ -1053,19 +741,19 @@
     debugLastTime = r.time;
     const pct = value => `${Math.round(clamp(value, 0, 1) * 100)}%`;
     const set = (key, text) => { if (debugFields[key].textContent !== text) debugFields[key].textContent = text; };
-    set('engine', wantsBeatNet() ? `${aiLabel()}（試験） · ${beatNetStatus}${running && r.engine === 'basic' ? '／従来方式で表示' : ''}` : '従来方式');
+    set('engine', `${aiLabel()}（試験） · ${beatThisStatus}${running && !aiActive ? '／リズム判定待ち' : ''}`);
     set('model-storage', beatThisStorageStatus);
-    const ai = beatNetState;
-    const aiFresh = ai && audio && audio.currentTime - ai.audioTime < (isBeatThis() ? 12 : .75) && !beatNetClient?.stopped;
-    set('ai', running && aiFresh && isBeatThis() ? `拍 ${pct(ai.beatProbability)} / 小節頭 ${pct(ai.downProbability)} · 解析 ${(ai.processingMs / 1000).toFixed(2)}秒 · 入力 ${(audio.currentTime - ai.audioTime).toFixed(1)}秒前` : running && aiFresh ? `拍 ${pct(ai.beatProbability)} / 小節頭 ${pct(ai.downProbability)} · ${ai.processedFrames ? (ai.processingMs / ai.processedFrames).toFixed(1) : '—'}ms/フレーム` : '—');
-    set('comparison', running ? `${basicRhythm.tracking ? basicRhythm.bpm.toFixed(1) + ' BPM' : 'テンポ未確定'} / ${basicRhythm.meterConfidence > .5 ? basicRhythm.meter + '拍子系' : '拍子未確定'}` : '—');
+    const ai = beatThisState;
+    const aiFresh = ai && audio && audio.currentTime - ai.audioTime < 12 && !beatThisClient?.stopped;
+    set('ai', running && aiFresh ? `拍 ${pct(ai.beatProbability)} / 小節頭 ${pct(ai.downProbability)} · 解析 ${(ai.processingMs / 1000).toFixed(2)}秒 · 確定端 ${(audio.currentTime - ai.audioTime + .5).toFixed(1)}秒前` : '—');
+    set('comparison', aiFresh ? `入力RMS ${(ai.inputRms ?? 0).toFixed(4)} / 補正 ${(ai.inputGain ?? 0).toFixed(2)}倍` : '—');
     set('input', !running ? '停止中' : `${demo ? 'デモ入力' : 'マイク入力'} · ${audible ? '解析中' : '無音／入力待ち'}`);
     set('tempo', locked ? `${r.bpm.toFixed(1)} BPM / ${(r.bpm / 60).toFixed(2)} BPS · 確かさ ${pct(r.confidence)}` : `— BPM / — BPS · ${audible ? '推定中' : '判定待ち'}`);
     set('tracking', locked ? `${(r.engine !== 'basic' || r.evidence > .35) && r.time - r.lastSupport < Math.max(.75, r.period * 1.5) ? '追従中' : '履歴で継続'} · 最終支持 ${Math.max(0, r.time - r.lastSupport).toFixed(1)}秒前` : '推定待ち');
-    set('meter-evidence', audible && r.engine !== 'basic' && ai ? `2拍 ${pct(ai.meterMass[0])} / 3拍 ${pct(ai.meterMass[1])} / 4拍 ${pct(ai.meterMass[2])}` : audible ? `3拍 ${pct(r.meterScores[0])} / 4拍 ${pct(r.meterScores[1])} · 候補差 ${pct(r.meterMargin)}` : '—');
+    set('meter-evidence', audible && r.engine !== 'basic' && ai ? `3拍 ${pct(ai.meterMass[1])} / 4拍 ${pct(ai.meterMass[2])}` : audible ? `3拍 ${pct(r.meterScores[0])} / 4拍 ${pct(r.meterScores[1])} · 候補差 ${pct(r.meterMargin)}` : '—');
     set('meter', meterKnown ? `${r.meter}拍子系 · 確かさ ${pct(r.meterConfidence)}` : `未確定 · 確かさ ${pct(audible ? r.meterConfidence : 0)}`);
     set('position', meterKnown ? Array.from({ length: r.meter }, (_, i) => `${i + 1 === r.beatInBar ? '●' : '○'}${i + 1}`).join('  ') : '—');
-    set('window', r.engine === 'beat-this' ? `Beat This! · 直近${ai.windowSeconds.toFixed(1)}秒／約3秒ごと解析・現在拍は予測` : r.engine === 'beatnet' ? 'BeatNet逐次CRNN＋粒子追跡（50Hz）' : `直近48拍${locked ? ` ≈ ${(48 * r.period).toFixed(1)}秒` : ''} · 記録 ${r.accents.filter(a => a.index < r.beatCount).length}拍 · 最低3周期`);
+    set('window', aiFresh ? `直近${ai.windowSeconds.toFixed(1)}秒／最短1秒ごと解析・両端0.5秒除外・現在拍は予測` : '2秒から開始・最大8秒');
     const expression = `${m.warmth > .15 ? '明るめ' : m.warmth < -.15 ? '陰影あり' : '中間'}・${m.activity > .55 ? '活発' : m.activity < .3 ? '穏やか' : '中程度の動き'}`;
     set('mood', audible ? `${expression} · 活動 ${pct(m.activity)} / 緊張 ${pct(m.tension)} / 確かさ ${pct(m.confidence)}` : '—');
     set('timbre', audible ? `${m.brightness < .35 ? '低域寄り' : m.brightness > .65 ? '高域寄り' : '中域寄り'}・${m.flatness > .45 ? 'ノイズ的' : '倍音的'}（明るさ ${pct(m.brightness)} / 平坦度 ${pct(m.flatness)}）` : '—');
@@ -1762,12 +1450,12 @@
   document.addEventListener('visibilitychange', () => {
     cancelAnimationFrame(frameId); previous = 0;
     if (document.hidden) {
-      beatNetClient?.stop(); beatNetClient = null; beatNetState = null; aiActive = false;
-      beatNetStatus = '一時停止';
+      beatThisClient?.stop(); beatThisClient = null; beatThisState = null; aiActive = false;
+      beatThisStatus = '一時停止';
       if (wake) { wake.release().catch(() => {}); wake = null; }
       if (audio?.state === 'running') audio.suspend().catch(() => {});
     } else if (running) {
-      if (!demo && audio && source) beginBeatNet();
+      if (!demo && audio && source) beginBeatThis();
       audio?.resume().catch(() => message('音声を再開できませんでした。「終了」の後に「開始」を押してください。'));
       acquireWake(); frameId = requestAnimationFrame(frame);
     }

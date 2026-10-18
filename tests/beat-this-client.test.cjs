@@ -18,6 +18,7 @@ function clientFixture(autoReady = true, options = {}) {
     disconnect() { this.disconnected = true; }
   }
   const context = { sampleRate: 48000, audioWorklet: { async addModule() {} },
+    createBiquadFilter: () => ({ frequency: {}, connect() {}, disconnect() {} }),
     createGain: () => ({ gain: {}, connect() {}, disconnect() {} }), destination: {} };
   const source = { connections: new Set(), connect(node) { this.connections.add(node); }, disconnect(node) { this.connections.delete(node); } };
   const window = { Worker, AudioWorkletNode };
@@ -42,7 +43,7 @@ test('CPU inference permits a bounded audio queue and fails cleanly on overload'
   f.workers[0].emit({ type: 'ack' }); f.capture(); assert.equal(f.client.pending, 256);
   f.capture(); assert.ok(f.client.stopped && f.workers[0].terminated);
   assert.equal(f.source.connections.size, 0);
-  assert.match(f.statuses.at(-1), /追いつきません.*従来方式/);
+  assert.match(f.statuses.at(-1), /追いつきません.*リズム判定を停止/);
 });
 test('delayed inference results are timestamped, but excessively stale results are rejected', async () => {
   const f = clientFixture(); await f.client.start(f.context, f.source);

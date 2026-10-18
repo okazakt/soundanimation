@@ -53,7 +53,7 @@
       this.context = context; this.source = source;
       if (typeof navigator !== 'undefined' && navigator.serviceWorker) await this.prepareStorage(navigator.serviceWorker);
       if (this.stopped) return;
-      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.20', document.baseURI), { type: 'module' });
+      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.21', document.baseURI), { type: 'module' });
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => this.fail('モデル準備がタイムアウトしました（通信・空きメモリを確認）'), 180000);
         this.readyReject = error => { clearTimeout(timer); reject(error); };
@@ -72,15 +72,15 @@
             const age = context.currentTime - data.state.audioTime;
             if (age > 10) { this.fail('処理が入力に追いつきません'); return; }
             this.onState({ ...data.state, receivedAudioTime: context.currentTime });
-            this.onStatus(`解析中 · ${this.provider === 'webgpu' ? 'GPU' : 'CPU'} · 直近${data.state.windowSeconds.toFixed(0)}秒／約3秒ごと更新${data.state.resyncCount ? ` · 再同期${data.state.resyncCount}回` : ''}`);
+            this.onStatus(`解析中 · ${this.provider === 'webgpu' ? 'GPU' : 'CPU'} · 直近${data.state.windowSeconds.toFixed(0)}秒／最短1秒ごと更新${data.state.resyncCount ? ` · 再同期${data.state.resyncCount}回` : ''}`);
           }
         };
         worker.postMessage({ type: 'load', rate: context.sampleRate });
       });
       if (this.stopped) return;
-      await context.audioWorklet.addModule(new URL('./beatnet-capture.js?v=2026.10.18.20', document.baseURI));
+      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.18.21', document.baseURI));
       if (this.stopped) return;
-      this.node = new AudioWorkletNode(context, 'beatnet-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      this.node = new AudioWorkletNode(context, 'beat-this-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       this.node.port.onmessage = ({ data }) => {
         if (this.stopped) return;
         // A bounded queue; never silently skip audio and retain a false phase.
@@ -90,14 +90,16 @@
           rate: data.sampleRate ?? context.sampleRate, discontinuity: !!data.discontinuity }, [data.pcm.buffer]);
       };
       this.mute = context.createGain(); this.mute.gain.value = 0;
-      source.connect(this.node); this.node.connect(this.mute); this.mute.connect(context.destination);
-      this.onStatus('音を収集中 · 最初の解析は8秒後（直近最大16秒を参照）');
+      this.highpass = context.createBiquadFilter(); this.highpass.type = 'highpass'; this.highpass.frequency.value = 30;
+      this.lowpass = context.createBiquadFilter(); this.lowpass.type = 'lowpass'; this.lowpass.frequency.value = Math.min(12000, context.sampleRate * .45);
+      source.connect(this.highpass); this.highpass.connect(this.lowpass); this.lowpass.connect(this.node); this.node.connect(this.mute); this.mute.connect(context.destination);
+      this.onStatus('音を収集中 · 最初の解析は2秒後（直近最大8秒を参照）');
     }
-    fail(message) { if (this.stopped) return; this.onState(null); this.onStatus(`${message}・従来方式で継続`); this.readyReject?.(new Error(message)); this.stop(); }
+    fail(message) { if (this.stopped) return; this.onState(null); this.onStatus(`${message}・リズム判定を停止`); this.readyReject?.(new Error(message)); this.stop(); }
     stop() {
       this.stopped = true; this.cancelPrepare?.(); this.readyReject?.(new Error('Beat This!停止')); this.readyReject = null;
-      if (this.node) { try { this.source?.disconnect(this.node); } catch {} this.node.port.onmessage = null; this.node.disconnect(); }
-      this.mute?.disconnect(); this.worker?.terminate(); this.worker = null;
+      if (this.node) { try { this.source?.disconnect(this.highpass); } catch {} this.node.port.onmessage = null; this.node.disconnect(); }
+      this.highpass?.disconnect(); this.lowpass?.disconnect(); this.mute?.disconnect(); this.worker?.terminate(); this.worker = null;
     }
   }
   window.BeatThisClient = BeatThisClient;

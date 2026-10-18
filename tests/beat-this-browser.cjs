@@ -35,7 +35,7 @@ function synthesize(file, meter) {
       const type = (file.endsWith('.js') || file.endsWith('.mjs')) ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.json') ? 'application/json' : (file.endsWith('.f32') || file.endsWith('.onnx')) ? 'application/octet-stream' : file.endsWith('.wasm') ? 'application/wasm' : 'text/html';
       res.setHeader('Content-Type', type);
       let data = fs.readFileSync(file);
-      if (file.endsWith('/app.js')) data = data.toString().replace('  resize();\n  if', '  window.beatNetTest = () => ({ rhythm, basicRhythm, beatNetState, beatNetStatus, aiActive });\n  resize();\n  if');
+      if (file.endsWith('/app.js')) data = data.toString().replace('  resize();\n  if', '  window.beatThisTest = () => ({ rhythm, basicRhythm, beatThisState, beatThisStatus, aiActive });\n  resize();\n  if');
       res.end(data);
     } catch { res.writeHead(404); res.end(); }
   });
@@ -53,30 +53,28 @@ function synthesize(file, meter) {
         const errors = []; page.on('pageerror', error => errors.push(error.message));
         await page.goto(url);
         await page.waitForFunction(() => window.ModelSetup?.complete, null, { timeout: 30000 });
-        await page.selectOption('#analysis-engine', 'beat-this'); await page.click('#start');
+         await page.click('#start');
         page.on('console', msg => { if (msg.type() === 'error') console.log('BROWSER', msg.text()); });
-        log = setInterval(async () => { try { console.log(await page.evaluate(() => ({ status: window.beatNetTest().beatNetStatus, state: window.beatNetTest().beatNetState && { bpm: window.beatNetTest().beatNetState.bpm, meter: window.beatNetTest().beatNetState.meter, meterConfidence: window.beatNetTest().beatNetState.meterConfidence, processingMs: window.beatNetTest().beatNetState.processingMs }, active: window.beatNetTest().aiActive }))); } catch {} }, 5000);
+        log = setInterval(async () => { try { console.log(await page.evaluate(() => ({ status: window.beatThisTest().beatThisStatus, state: window.beatThisTest().beatThisState && { bpm: window.beatThisTest().beatThisState.bpm, meter: window.beatThisTest().beatThisState.meter, meterConfidence: window.beatThisTest().beatThisState.meterConfidence, processingMs: window.beatThisTest().beatThisState.processingMs }, active: window.beatThisTest().aiActive }))); } catch {} }, 5000);
         await page.waitForFunction(expected => {
-          const s = window.beatNetTest(); return s.aiActive && (expected === 3 || s.rhythm.meter === expected) && Math.abs(s.rhythm.bpm - 120) < 8;
+          const s = window.beatThisTest(); return s.aiActive && (expected === 3 || s.rhythm.meter === expected) && Math.abs(s.rhythm.bpm - 120) < 8;
         }, meter, { timeout: 90000 });
         clearInterval(log); await page.waitForTimeout(4000);
-        const result = await page.evaluate(() => ({ bpm: window.beatNetTest().rhythm.bpm, meter: window.beatNetTest().rhythm.meter }));
+        const result = await page.evaluate(() => ({ bpm: window.beatThisTest().rhythm.bpm, meter: window.beatThisTest().rhythm.meter }));
         if (meter === 4) assert.equal(result.meter, meter); // small0's synthetic triple-meter accuracy is not established.
-        assert.ok(Math.abs(result.bpm - 120) < 8); assert.ok(await page.evaluate(() => window.beatNetTest().aiActive)); console.log('PASS microphone → resampler → Beat This! → renderer', result);
-        console.log('STATE', await page.evaluate(() => ({ status: window.beatNetTest().beatNetStatus, debug: document.querySelector('#debug-ai').textContent })));
+        assert.ok(Math.abs(result.bpm - 120) < 8); assert.ok(await page.evaluate(() => window.beatThisTest().aiActive)); console.log('PASS microphone → resampler → Beat This! → renderer', result);
+        console.log('STATE', await page.evaluate(() => ({ status: window.beatThisTest().beatThisStatus, debug: document.querySelector('#debug-ai').textContent })));
         await page.waitForTimeout(12000);
-        assert.ok(await page.evaluate(() => window.beatNetTest().beatNetState.windowSeconds === 16 && !window.beatNetTest().beatNetStatus.includes('従来方式で継続')), 'rolling inference reaches a full window without accumulating a capture backlog');
+        assert.ok(await page.evaluate(() => window.beatThisTest().beatThisState.windowSeconds === 8 && !window.beatThisTest().beatThisStatus.includes('リズム判定を停止')), 'rolling inference reaches a full window without accumulating a capture backlog');
         if (meter === 4) await page.screenshot({ path: '/tmp/beat-this-browser.png' });
-        await page.selectOption('#analysis-engine', 'basic');
-        assert.equal(await page.evaluate(() => window.beatNetTest().rhythm.engine), 'basic');
-        await page.selectOption('#analysis-engine', 'beat-this'); await page.waitForTimeout(500);
+        assert.ok(!requested.some(url => url.includes('beatnet')));
         await page.click('#stop');
-        assert.equal(await page.evaluate(() => window.beatNetTest().beatNetState), null);
+        assert.equal(await page.evaluate(() => window.beatThisTest().beatThisState), null);
         assert.deepEqual(errors, []);
         await page.route('**/vendor/beat-this/beat-this-small0.onnx', route => route.fulfill({ status: 404, body: '' }));
         await page.click('#start');
-        await page.waitForFunction(() => window.beatNetTest().beatNetStatus.includes('従来方式で継続'));
-        assert.equal(await page.evaluate(() => window.beatNetTest().rhythm.engine), 'basic');
+        await page.waitForFunction(() => window.beatThisTest().beatThisStatus.includes('リズム判定を停止'));
+        assert.equal(await page.evaluate(() => window.beatThisTest().rhythm.engine), 'basic');
         await page.click('#stop');
         console.log('PASS bounded live windows, lazy assets, stop, switching and model-load fallback');
       } finally { clearInterval(log); await browser.close(); }

@@ -6,7 +6,7 @@ function fixture() {
   let Processor, frame = 48000 * 10; const messages = [];
   const scope = { Float32Array, sampleRate: 48000, currentFrame: frame, currentTime: frame / 48000,
     AudioWorkletProcessor: class { constructor() { this.port = { postMessage: message => messages.push(message) }; } }, registerProcessor: (_, value) => Processor = value };
-  vm.runInNewContext(fs.readFileSync(require.resolve('../beatnet-capture.js'), 'utf8'), scope);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../beat-this-capture.js'), 'utf8'), scope);
   const processor = new Processor();
   return { messages, step(value, length = 128) { scope.currentFrame = frame; scope.currentTime = frame / 48000;
     processor.process(value === null ? [[]] : [[new Float32Array(length).fill(value)]], [[new Float32Array(length)]]); frame += length; } };

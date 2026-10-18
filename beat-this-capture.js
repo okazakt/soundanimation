@@ -1,6 +1,6 @@
 /* Capture only. Microphone PCM is sent to a local AI worker. */
 'use strict';
-class BeatNetCapture extends AudioWorkletProcessor {
+class BeatThisCapture extends AudioWorkletProcessor {
   constructor() { super(); this.buffer = new Float32Array(2048); this.position = 0; this.firstFrame = 0; this.discontinuity = false; }
   process(inputs, outputs) {
     for (const output of outputs) for (const channel of output) channel.fill(0);
@@ -24,4 +24,4 @@ class BeatNetCapture extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor('beatnet-capture', BeatNetCapture);
+registerProcessor('beat-this-capture', BeatThisCapture);
