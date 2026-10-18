@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.26';
+  const VERSION = '2026.10.18.27';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -948,8 +948,10 @@
   }
   function updateFocus(dt, audible) {
     if (audible) focus.phase += Math.PI * 2 * dt / Math.max(3.5, (rhythm.bpm ? rhythm.period : .75) * 8);
-    focus.x = width / 2;
-    focus.y = lerp(height / 2 + Math.sin(focus.phase) * Math.min(26, height * .055), focus.y, Math.exp(-dt / .7));
+    const centre=focus.path.update(rhythm,dt);
+    focus.stageX=width*centre.x;focus.stageY=width*centre.y;
+    focus.x=width*.5;
+    focus.y=height*.5+Math.sin(focus.phase)*Math.min(26,height*.055)*(1-focus.path.gain);
     focus.strength = lerp(audible ? 1 : 0, focus.strength, Math.exp(-dt / .8));
     focus.satellites.forEach(point => {
       point.age += dt; point.strength = Math.sin(Math.PI * clamp(point.age / point.life, 0, 1)) ** 2;
@@ -978,7 +980,7 @@
     }
   }
   function prepareFlocks() {
-    Object.assign(focus, { x: width / 2, y: height / 2, phase: 0, strength: 0, satellites: [], next: 7, cycle: 0 });
+    Object.assign(focus, { x: width / 2, y: height / 2, phase: 0, strength: 0, satellites: [], next: 7, cycle: 0, stageX: 0, stageY: 0, path: new window.DanceMotion.CentrePath() });
     beatCooldown = 0;
     backgroundTone = .5; backgroundEnergy = 0;
     flocks = Array.from({ length: 10 }, (_, id) => ({
@@ -1186,8 +1188,8 @@
       const px = lerp(a[0], b[0], mix), py = lerp(a[1], b[1], mix);
       const ct = Math.cos(f.beatTurn), st = Math.sin(f.beatTurn);
       const danceStep=Math.min(width,height)*(.035+.035*f.danceEnergy);
-      const tx=width*(.5+(px*ct-py*st)*extent)+f.danceX*danceStep;
-      const ty=height*(.5+(px*st+py*ct)*extent)+f.danceY*danceStep;
+      const tx=focus.x+width*((px*ct-py*st)*extent)+f.danceX*danceStep;
+      const ty=focus.y+height*((px*st+py*ct)*extent)+f.danceY*danceStep;
       advanceLeader(f, tx, ty, dt);
       if (Math.hypot(f.vx, f.vy) > 3) {
         const desired = Math.atan2(f.vy, f.vx);
@@ -1432,7 +1434,7 @@
         const angle=i*Math.PI*2/count+(rhythm.beatCount-back)*.47;
         const variation=.78+.22*Math.sin(i*2.7+rhythm.beatCount-back)**2;
         const radius=size*(.22+.22*drive)*age*variation;
-        const x=width*.5+Math.cos(angle)*radius, y=height*.5+Math.sin(angle)*radius;
+        const x=focus.x+Math.cos(angle)*radius, y=focus.y+Math.sin(angle)*radius;
         const r=(2+(i%4)*.9)*(down?1.2:1);
         const hue=(i*137.5+mood.warmth*35+rhythm.beatCount*9)%360;
         ctx.globalAlpha=lock*envelope*weight*(.35+.55*drive);
@@ -1451,6 +1453,7 @@
     sky.addColorStop(0, `hsl(${hue},48%,${3 + backgroundEnergy * 5}%)`);
     sky.addColorStop(1, `hsl(${hue + 35},55%,${7 + backgroundEnergy * 12}%)`);
     ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
+    ctx.save();ctx.translate(focus.stageX,focus.stageY);
     ctx.globalCompositeOperation = 'lighter';
     drawFocusPoints();
     drawBeatRadiation();
@@ -1476,6 +1479,7 @@
         ctx.beginPath(); ctx.ellipse(x,y,radius*(1+squash),radius*(1-squash),f.heading*.15,0,Math.PI*2); ctx.fill();
       }
     }
+    ctx.restore();
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   }
 

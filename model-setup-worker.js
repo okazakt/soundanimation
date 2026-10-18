@@ -1,5 +1,5 @@
 'use strict';
-importScripts('./model-assets.js?v=2026.10.18.26');
+importScripts('./model-assets.js?v=2026.10.18.27');
 let busy = false;
 const emit = state => self.postMessage(state);
 self.onmessage = async ({ data }) => {

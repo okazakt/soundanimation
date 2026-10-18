@@ -52,3 +52,37 @@ test('all choreography values stay finite and bounded across tempo, meter, mood 
     }
   }
 });
+
+test('centre traverses triangle edges every two beats and diamond edges after stable four meter',()=>{
+  const run=(meter,bpm,seconds)=>{
+    const path=new Dance.CentrePath(),samples=[];
+    for(let i=0;i<seconds*120;i++) {
+      const cycle=i/120*bpm/60;
+      const point=path.update({tracking:true,confidence:1,bpm,period:60/bpm,beatCount:Math.floor(cycle),phase:cycle%1,meter,meterConfidence:1},1/120);
+      samples.push(point);
+    }
+    return {path,samples};
+  };
+  const triangle=run(0,120,24);
+  assert.equal(triangle.path.interval,2);assert.ok(Math.abs(triangle.path.step-24)<.02);
+  // Settled vertices are separated by 20% of viewport width.
+  const a=triangle.samples[120*20],b=triangle.samples[120*21];
+  assert.ok(Math.abs(Math.hypot(a.x-b.x,a.y-b.y)-.2)<.002);
+  const diamond=run(4,120,24);
+  assert.equal(diamond.path.interval,2);assert.ok(diamond.path.morph>.999);
+  const c=diamond.samples[120*20],d=diamond.samples[120*21];
+  assert.ok(Math.abs(Math.hypot(c.x-d.x,c.y-d.y)-.2)<.002);
+  assert.equal(run(0,180,15).path.interval,4);
+  assert.equal(run(3,75,15).path.interval,1);
+  assert.equal(run(3,120,15).path.interval,3);
+});
+test('centre remains continuous through meter changes, clock corrections and silence',()=>{
+  const path=new Dance.CentrePath();let last={x:0,y:0};
+  for(let i=0;i<3600;i++) {
+    const cycle=i/60*2+(i>1800?8:0);
+    const point=path.update({tracking:i<3000,confidence:1,bpm:120,period:.5,beatCount:Math.floor(cycle),phase:cycle%1,meter:i<600?0:i<1800?4:3,meterConfidence:1},1/60);
+    assert.ok(Math.hypot(point.x-last.x,point.y-last.y)<.012,'no teleport when pattern changes');
+    assert.ok(Math.abs(point.x)<.15 && Math.abs(point.y)<.15);last=point;
+  }
+  assert.ok(Math.hypot(last.x,last.y)<.0001);
+});
