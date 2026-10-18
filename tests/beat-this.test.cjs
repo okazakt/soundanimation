@@ -11,13 +11,13 @@ function fixture(meter, duration = 16) {
     beatConfidence: Array(duration * 50 + 1).fill(.9), downbeatConfidence: Array(duration * 50 + 1).fill(.8) };
 }
 test('vendored ONNX export matches pinned release checksum', () => {
-  const model = fs.readFileSync(path.join(root, 'vendor/beat-this/beat-this.onnx'));
+  const model = fs.readFileSync(path.join(root, 'vendor/beat-this/beat-this-small0.onnx'));
   const manifest = require('../vendor/beat-this/model.json');
   assert.equal(model.length, manifest.model.bytes);
   assert.equal(createHash('sha256').update(model).digest('hex'), manifest.model.sha256);
 });
 test('bundled frontend matches pinned browser-port reference including chunk boundaries', async () => {
-  const { extractFeatures, postprocess } = await import('../vendor/beat-this/beat-this.mjs');
+  const { extractFeatures, postprocess } = await import('../vendor/beat-this/beat-this-cpu.mjs');
   const golden = require('./beat-this-preprocessing-reference.json');
   for (const { length, sha256 } of golden) {
     const pcm = Float32Array.from({ length }, (_, i) => Math.sin(i * .037) * .2 + Math.cos(i * .011) * .1);

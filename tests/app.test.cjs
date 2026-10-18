@@ -38,7 +38,7 @@ function fixture(getMicrophone, options = {}) {
     assert.equal(constraints.audio.noiseSuppression, false);
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
-  const window = { BeatNetClient: options.beatNetClient, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
+  const window = { BeatNetClient: options.beatNetClient, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: options.dpr || 2, addEventListener(type, fn) { events[type] = fn; } };
   // Reproducible visual variation keeps coverage independent of session RNG.
   let randomState = options.randomSeed ?? 0x12345678;
   const deterministicMath = Object.create(Math);
@@ -175,7 +175,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.19'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.20'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -1102,4 +1102,9 @@ test('page setup blocks microphone access and start until model preparation comp
   setup.complete = true; f.events['model-setup-state']();
   assert.equal(f.nodes['#start'].disabled, false);
   await f.nodes['#start'].click(); assert.equal(f.counts().requestCount, 1); f.nodes['#stop'].click();
+});
+
+test('high density displays cap canvas backing storage at DPR 2', () => {
+  const f = fixture(async stream => stream, { dpr: 3, width: 390, height: 844 });
+  assert.equal(f.nodes['#canvas'].width, 780); assert.equal(f.nodes['#canvas'].height, 1688);
 });

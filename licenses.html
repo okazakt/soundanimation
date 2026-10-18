@@ -3,10 +3,10 @@
 <style>body{margin:32px auto;padding:0 20px;max-width:760px;background:#050714;color:#edf2ff;font:15px/1.9 system-ui,sans-serif}a{color:#b6ccef}h1{font-size:24px}h2{font-size:18px}p{overflow-wrap:anywhere}</style></head><body>
 <h1>帰属・ライセンス</h1>
 <h2>Beat This!（ブラウザ試験モード）</h2>
-<p>原著者：Francesco Foscarin、Jan Schlüter、Gerhard Widmer。<a href="https://github.com/CPJKU/beat_this">Beat This!</a>（ISMIR 2024）の公開モデル final0 を、Johannes Gorsetによる<a href="https://github.com/jgorset/beat-this">ブラウザ移植</a>とともに使用しています。モデルの数値は変更していません。</p>
+<p>原著者：Francesco Foscarin、Jan Schlüter、Gerhard Widmer。<a href="https://github.com/CPJKU/beat_this">Beat This!</a>（ISMIR 2024）の公開軽量モデル small0 を、Johannes Gorsetによる<a href="https://github.com/jgorset/beat-this">ブラウザ移植</a>とともに使用しています。モデルの数値は変更していません。</p>
 <p>コード・公開モデルはMITライセンスです。著作権と許諾表示を残した商用利用・改変・再配布が認められています。<a href="./vendor/beat-this/LICENSE">ライセンス全文</a>、<a href="./vendor/beat-this/NOTICE.md">出典・変更記録</a>、<a href="./vendor/beat-this/model.json">モデルのハッシュ</a>。公式READMEには学習音源の権利について用途ごとの判断が必要との注記があります。</p>
 <p>実行環境：ONNX Runtime Web 1.23.2（Microsoft、<a href="./vendor/beat-this/ONNXRUNTIME-LICENSE.txt">MIT</a>・<a href="./vendor/beat-this/ONNXRUNTIME-NOTICES.txt">第三者表示</a>）、fft.js 4.0.4（Fedor Indutny、<a href="./vendor/beat-this/FFT-LICENSE.txt">MIT</a>）。</p>
-<p>アプリでの変更：直近最大16秒のマイク入力を反復解析し、拍・小節頭の時刻からテンポ・拍子系・現在拍を予測します。公式のリアルタイム対応版ではなく、解析に遅れがあり、端末性能に左右されます。</p>
+<p>モデルは<a href="https://github.com/Kanebos9/riffsheet/tree/d7783e09a8e9aa3d6fbe853c3471aa8287769a9e/shell/Resources/models/beat-this">Riffsheetで公開されたONNX変換</a>を使用しています。アプリでの変更：CPU専用ランタイムとモデルの直接バイト入力でメモリを抑え、直近最大16秒のマイク入力を反復解析し、拍・小節頭の時刻からテンポ・拍子系・現在拍を予測します。公式のリアルタイム対応版ではなく、解析に遅れがあり、端末性能に左右されます。</p>
 <h2>BeatNet（試験的なJavaScript移植）</h2>
 <p>このアプリは、Mojtaba Heydari、Frank Cwitkowitz、Zhiyao Duanによる <a href="https://github.com/mjhydri/BeatNet">BeatNet</a> の学習済みモデルとアルゴリズムを使用しています。</p>
 <p>論文：<a href="https://arxiv.org/abs/2108.03576">BeatNet: CRNN and Particle Filtering for Online Joint Beat Downbeat and Meter Tracking</a>（ISMIR 2021）。元コードの著者：Mojtaba Heydari。</p>

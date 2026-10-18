@@ -8,12 +8,12 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.19">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.20">
   <title>Starlight Bell</title>
-  <script src="./model-setup.js?v=2026.10.18.19" defer></script>
-  <script src="./beatnet-client.js?v=2026.10.18.19" defer></script>
-  <script src="./beat-this-client.js?v=2026.10.18.19" defer></script>
-  <script src="./app.js?v=2026.10.18.19" defer></script>
+  <script src="./model-setup.js?v=2026.10.18.20" defer></script>
+  <script src="./beatnet-client.js?v=2026.10.18.20" defer></script>
+  <script src="./beat-this-client.js?v=2026.10.18.20" defer></script>
+  <script src="./app.js?v=2026.10.18.20" defer></script>
 </head>
 <body>
   <section id="model-setup" aria-labelledby="setup-title" aria-busy="true">
@@ -24,7 +24,7 @@
       <strong id="setup-percent">確認中</strong>
       <progress id="setup-progress" max="100" aria-label="モデルのダウンロード進捗"></progress>
       <p id="setup-amount"></p>
-      <p id="setup-detail">初回は約110MBを取得して端末に保存します。準備が完了すると操作できます。</p>
+      <p id="setup-detail">初回は約23MBを取得して端末に保存します。準備が完了すると操作できます。</p>
       <button id="setup-retry" type="button" hidden>再試行</button>
       <p class="setup-note">2回目以降は、保存済みデータを再利用します。</p>
     </div>
@@ -62,7 +62,7 @@
   </main>
   <div id="analysis-controls">
     <label for="analysis-engine">解析方式</label>
-    <select id="analysis-engine"><option value="beatnet" selected>BeatNet AI（試験）</option><option value="beat-this">Beat This! AI（試験）</option><option value="basic">従来方式</option></select>
+    <select id="analysis-engine"><option value="beatnet" selected>BeatNet AI（試験）</option><option value="beat-this">Beat This! AI（軽量・試験）</option><option value="basic">従来方式</option></select>
     <a href="./licenses.html" target="_blank" rel="noopener">帰属・ライセンス</a>
   </div>
   <div id="microphone-controls">

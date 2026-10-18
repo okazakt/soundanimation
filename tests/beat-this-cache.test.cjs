@@ -4,8 +4,8 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const code = fs.readFileSync(require.resolve('../sw.js'), 'utf8');
 const base = 'https://example.test/soundanimation/';
-const modelCache = 'starlight-bell-soundanimation-beat-this-final0-ort-1.23.2-v1';
-const files = ['beat-this.onnx', 'beat-this.mjs', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm'];
+const modelCache = 'starlight-bell-soundanimation-beat-this-small0-ort-1.23.2-cpu-v2';
+const files = ['beat-this-small0.onnx', 'beat-this-cpu.mjs', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm'];
 const url = name => base + 'vendor/beat-this/' + name;
 function fixture() {
   const stores = new Map(), fetched = [], installed = [], removed = [];
@@ -38,7 +38,7 @@ test('AI cache stays independent of shell installation, survives upgrades, and s
   assert.equal(f.fetched.length, 4);
   await f.boot().get(files[0]); assert.equal(f.fetched.length, 4, 'reload must use persisted model without fetching');
   f.stores.set('sensor-cache', new Map()); f.stores.set('starlight-bell-soundanimation-v0', new Map());
-  const upgrade = f.boot(code.replaceAll('2026.10.18.19', '2026.10.18.20'));
+  const upgrade = f.boot(code.replaceAll('2026.10.18.20', '2026.10.18.21'));
   await new Promise(resolve => upgrade.events.activate({ waitUntil: p => p.then(resolve) }));
   assert.equal(upgrade.claims(), 1); assert.ok(f.stores.has(modelCache)); assert.ok(f.stores.has('sensor-cache'));
   assert.ok(f.removed.includes('starlight-bell-soundanimation-v0')); assert.ok(!f.removed.includes(modelCache));
@@ -57,7 +57,7 @@ test('failed or partial downloads never poison the cache; unavailable storage st
 });
 test('cache-first routing ignores other applications and outside requests', async () => {
   const { events } = fixture().boot();
-  for (const other of ['https://example.test/other/vendor/beat-this/beat-this.onnx', 'https://other.test/soundanimation/vendor/beat-this/beat-this.onnx', base + 'vendor/beat-this/unknown.wasm']) {
+  for (const other of ['https://example.test/other/vendor/beat-this/beat-this-small0.onnx', 'https://other.test/soundanimation/vendor/beat-this/beat-this-small0.onnx', base + 'vendor/beat-this/unknown.wasm']) {
     events.fetch({ request: { url: other, method: 'GET' }, respondWith() { assert.fail('outside request intercepted'); } });
   }
 });

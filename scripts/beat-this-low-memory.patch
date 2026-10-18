@@ -1,0 +1,41 @@
+diff --git a/src/index.ts b/src/index.ts
+index 44705c3..cea9004 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1 +1 @@
+-import * as ort from 'onnxruntime-web/webgpu';
++import * as ort from 'onnxruntime-web/wasm';
+@@ -27 +27 @@ export type BeatThis = {
+-/** Load a reusable tracker. Choose one execution provider; failures are surfaced. */
++/** Load a reusable tracker. Use the CPU execution provider; failures are surfaced. */
+@@ -29,2 +29,3 @@ export async function createBeatThis(options: {
+-    modelUrl: string;
+-    executionProvider?: 'webgpu' | 'wasm';
++    modelUrl?: string;
++    modelData?: Uint8Array;
++    executionProvider?: 'wasm';
+@@ -33,3 +34,3 @@ export async function createBeatThis(options: {
+-    if (!options?.modelUrl) throw new TypeError('Provide a Beat This ONNX model URL.');
+-    if (options.executionProvider && !['webgpu', 'wasm'].includes(options.executionProvider)) {
+-        throw new TypeError('Choose the webgpu or wasm execution provider.');
++    if (!options?.modelUrl && !options?.modelData) throw new TypeError('Provide a Beat This ONNX model URL.');
++    if (options.executionProvider && options.executionProvider !== 'wasm') {
++        throw new TypeError('Choose the wasm execution provider.');
+@@ -39,2 +40,6 @@ export async function createBeatThis(options: {
+-    const session = await ort.InferenceSession.create(options.modelUrl, {
+-        executionProviders: [options.executionProvider ?? 'webgpu'], graphOptimizationLevel: 'all',
++    let source = options.modelData ?? options.modelUrl!;
++    options.modelData = undefined;
++    const session = await ort.InferenceSession.create(source as Uint8Array, {
++        executionProviders: ['wasm'], graphOptimizationLevel: 'basic',
++        executionMode: 'sequential', enableCpuMemArena: false, enableMemPattern: false,
++        extra: { session: { disable_prepacking: '1' } },
+@@ -41,0 +47 @@ export async function createBeatThis(options: {
++    source = '';
+diff --git a/src/inference.ts b/src/inference.ts
+index 2afe291..8ea409b 100644
+--- a/src/inference.ts
++++ b/src/inference.ts
+@@ -1 +1 @@
+-import * as ort from 'onnxruntime-web/webgpu';
++import * as ort from 'onnxruntime-web/wasm';

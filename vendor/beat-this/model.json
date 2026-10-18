@@ -1,11 +1,11 @@
 {
   "upstream": "https://github.com/CPJKU/beat_this",
   "packageVersion": "1.1.0",
-  "checkpoint": "final0",
+  "checkpoint": "small0",
   "model": {
-    "file": "beat-this.onnx",
-    "bytes": 83008106,
-    "sha256": "5d8a94ce99fb33a6b26df6f6d8076decd52b8fd9439e3206d9b8bcdb1c2881bd",
+    "file": "beat-this-small0.onnx",
+    "bytes": 10555597,
+    "sha256": "9fa72ac17486ae137ee05ad0ef6a3dba63001c5aa6ada1ecb81c819870d67713",
     "opset": 17,
     "input": "spect",
     "outputs": [
@@ -14,8 +14,11 @@
     ]
   },
   "export": {
-    "torch": "2.6.0",
-    "onnx": "1.17.0"
+    "torch": "2.13.0",
+    "source": "https://github.com/Kanebos9/riffsheet/tree/d7783e09a8e9aa3d6fbe853c3471aa8287769a9e/shell/Resources/models/beat-this",
+    "checkpointSha256": "6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b",
+    "dynamicTime": true,
+    "dynamo": false
   },
   "preprocessing": {
     "sampleRate": 22050,

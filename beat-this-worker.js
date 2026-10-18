@@ -1,8 +1,8 @@
 // MIT-licensed Beat This! browser port. See vendor/beat-this/NOTICE.md.
-import { createBeatThis } from './vendor/beat-this/beat-this.mjs';
-import './beatnet-core.js?v=2026.10.18.19';
-import './beat-this-rhythm.js?v=2026.10.18.19';
-import './model-assets.js?v=2026.10.18.19';
+import { createBeatThis } from './vendor/beat-this/beat-this-cpu.mjs';
+import './beatnet-core.js?v=2026.10.18.20';
+import './beat-this-rhythm.js?v=2026.10.18.20';
+import './model-assets.js?v=2026.10.18.20';
 const RATE = 22050, CAPACITY = RATE * 16;
 let tracker, resampler, ring = new Float32Array(CAPACITY), written = 0, total = 0;
 let inputRate = RATE, inputSamples = 0, expectedInputTime = null, timeline = 0, resyncCount = 0;
@@ -12,34 +12,31 @@ async function load(rate) {
   inputRate = rate;
   resampler = new self.BeatNetCore.Resampler(rate);
   status('モデル読込 0%');
-  const response = await fetch('./vendor/beat-this/beat-this.onnx');
+  const file = self.ModelAssets.FILES[0];
+  const response = await fetch(self.ModelAssets.url(file, self.location.href));
   if (!response.ok) throw new Error(`モデル読込失敗 (${response.status})`);
   let bytes, previous = -1;
   try {
-    bytes = await self.ModelAssets.read(response, 83008106, received => {
-      const percent = Math.floor(received / 83008106 * 100);
+    bytes = await self.ModelAssets.read(response, file.bytes, received => {
+      const percent = Math.floor(received / file.bytes * 100);
       if (percent !== previous) { previous = percent; status(`モデル読込 ${percent}%`); }
     });
     status('モデル読込 100%・内容を確認中');
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
-    if (hash !== '5d8a94ce99fb33a6b26df6f6d8076decd52b8fd9439e3206d9b8bcdb1c2881bd') throw new Error('Invalid model');
+    if (hash !== file.sha256) throw new Error('Invalid model');
   } catch {
     // A bad successful HTTP response must not become a permanent cached error.
     try {
-      const cache = await caches.open('starlight-bell-soundanimation-beat-this-final0-ort-1.23.2-v1');
-      await cache.delete(new URL('./vendor/beat-this/beat-this.onnx', self.location.href).href);
+      const cache = await caches.open('starlight-bell-soundanimation-beat-this-small0-ort-1.23.2-cpu-v2');
+      await cache.delete(new URL('./vendor/beat-this/beat-this-small0.onnx', self.location.href).href);
     } catch {}
     throw new Error('モデルの検証に失敗しました。次の開始時にモデルを再取得します');
   }
-  const modelUrl = URL.createObjectURL(new Blob([bytes])), wasmPaths = new URL('./vendor/beat-this/', self.location.href).href;
-  try {
-    try {
-      if (navigator.gpu && await navigator.gpu.requestAdapter()) {
-        status('モデル読込 100%・GPUでAIを準備中'); tracker = await createBeatThis({ modelUrl, wasmPaths, executionProvider: 'webgpu' }); provider = 'webgpu';
-      }
-    } catch { status('モデル読込 100%・GPUを利用できないためCPUで準備中'); }
-    if (!tracker) { status('モデル読込 100%・CPUでAIを準備中'); tracker = await createBeatThis({ modelUrl, wasmPaths, executionProvider: 'wasm' }); }
-  } finally { URL.revokeObjectURL(modelUrl); }
+  const wasmPaths = new URL('./vendor/beat-this/', self.location.href).href;
+  status('モデル読込 100%・省メモリCPUでAIを準備中');
+  // ORT accepts bytes directly: no Blob copy, object URL or second fetch.
+  try { tracker = await createBeatThis({ modelData: new Uint8Array(bytes), wasmPaths, executionProvider: 'wasm' }); }
+  finally { bytes = null; }
   self.postMessage({ type: 'ready', provider });
 }
 async function analyze() {

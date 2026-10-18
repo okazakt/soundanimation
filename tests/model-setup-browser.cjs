@@ -13,7 +13,7 @@ const root = path.resolve(__dirname, '..');
     const relative = pathname.slice('/soundanimation'.length), file = path.resolve(root, '.' + (relative === '/' ? '/index.html' : relative));
     if (!file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
     try {
-      if (file.endsWith('asyncify.wasm') && failures === 0) { failures++; res.writeHead(503); return res.end('temporary error'); }
+      if (file.endsWith('ort-wasm-simd-threaded.wasm') && failures === 0) { failures++; res.writeHead(503); return res.end('temporary error'); }
       if (pathname.includes('/vendor/beat-this/')) counts.set(path.basename(file), (counts.get(path.basename(file)) || 0) + 1);
       const type = /\.m?js$/.test(file) ? 'text/javascript' : file.endsWith('.wasm') ? 'application/wasm' : file.endsWith('.css') ? 'text/css' : file.endsWith('.json') ? 'application/json' : /\.(onnx|f32)$/.test(file) ? 'application/octet-stream' : 'text/html';
       res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'no-store');
@@ -42,7 +42,7 @@ const root = path.resolve(__dirname, '..');
     await page.click('#setup-retry');
     await page.waitForFunction(() => window.ModelSetup.complete, null, { timeout: 30000 });
     assert.equal(await page.locator('#start').isEnabled(), true);
-    for (const name of ['beat-this.onnx', 'beat-this.mjs', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm']) assert.equal(counts.get(name), 1);
+    for (const name of ['beat-this-small0.onnx', 'beat-this-cpu.mjs', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']) assert.equal(counts.get(name), 1);
     console.log('PASS page setup failure remains blocked; retry reuses completed model and finishes only missing engine');
     const downloaded = [...counts]; await page.reload();
     await page.waitForFunction(() => window.ModelSetup.complete, null, { timeout: 10000 }); assert.deepEqual([...counts], downloaded);

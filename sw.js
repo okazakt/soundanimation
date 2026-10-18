@@ -1,31 +1,31 @@
 'use strict';
 // All cache operations and requests stay within this application's directory.
 const PREFIX = 'starlight-bell-soundanimation-';
-const CACHE = PREFIX + 'v2026.10.18.19';
+const CACHE = PREFIX + 'v2026.10.18.20';
 const BASE = new URL('./', self.location.href);
 // Immutable AI assets live independently of shell versions. Bump this key if
 // the model, bundled port or ORT files change; app updates must keep this cache.
-const MODEL_CACHE = PREFIX + 'beat-this-final0-ort-1.23.2-v1';
+const MODEL_CACHE = PREFIX + 'beat-this-small0-ort-1.23.2-cpu-v2';
 const MODEL_ASSETS = [
-  './vendor/beat-this/beat-this.onnx', './vendor/beat-this/beat-this.mjs',
-  './vendor/beat-this/ort-wasm-simd-threaded.asyncify.mjs',
-  './vendor/beat-this/ort-wasm-simd-threaded.asyncify.wasm'
+  './vendor/beat-this/beat-this-small0.onnx', './vendor/beat-this/beat-this-cpu.mjs',
+  './vendor/beat-this/ort-wasm-simd-threaded.mjs',
+  './vendor/beat-this/ort-wasm-simd-threaded.wasm'
 ].map(path => new URL(path, BASE).href);
 const ASSETS = [
-  './', './index.html', './style.css?v=2026.10.18.19', './app.js?v=2026.10.18.19',
-  './beatnet-client.js?v=2026.10.18.19', './beatnet-worker.js?v=2026.10.18.19',
-  './beatnet-core.js?v=2026.10.18.19', './beatnet-capture.js?v=2026.10.18.19',
+  './', './index.html', './style.css?v=2026.10.18.20', './app.js?v=2026.10.18.20',
+  './beatnet-client.js?v=2026.10.18.20', './beatnet-worker.js?v=2026.10.18.20',
+  './beatnet-core.js?v=2026.10.18.20', './beatnet-capture.js?v=2026.10.18.20',
   './vendor/beatnet/model-1.f32', './vendor/beatnet/manifest.json', './vendor/beatnet/frontend.json',
   './vendor/beatnet/LICENSE.txt', './vendor/beatnet/NOTICE.md', './vendor/beatnet/MADMOM-LICENSE.txt',
-  './beat-this-client.js?v=2026.10.18.19', './beat-this-worker.js?v=2026.10.18.19', './beat-this-rhythm.js?v=2026.10.18.19',
-  './model-setup.js?v=2026.10.18.19', './model-setup-worker.js?v=2026.10.18.19', './model-assets.js?v=2026.10.18.19',
+  './beat-this-client.js?v=2026.10.18.20', './beat-this-worker.js?v=2026.10.18.20', './beat-this-rhythm.js?v=2026.10.18.20',
+  './model-setup.js?v=2026.10.18.20', './model-setup-worker.js?v=2026.10.18.20', './model-assets.js?v=2026.10.18.20',
   './licenses.html', './manifest.json', './icons/192x192.png', './icons/512x512.png'
 ].map(path => new URL(path, BASE).href);
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(names => Promise.all(names.filter(name => name.startsWith(PREFIX) && name !== CACHE && name !== MODEL_CACHE).map(name => caches.delete(name)))).then(() => self.clients.claim()));
+  event.waitUntil(caches.keys().then(names => Promise.all(names.filter(name => name.startsWith(PREFIX) && name !== CACHE && name !== MODEL_CACHE && name !== PREFIX + 'beat-this-final0-ort-1.23.2-v1').map(name => caches.delete(name)))).then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);

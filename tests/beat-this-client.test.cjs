@@ -70,7 +70,7 @@ test('source clock/rate metadata override the context estimate; resync clears st
 });
 test('model readiness verifies all four persisted files and reports saved or unavailable storage', async () => {
   for (const saved of [true, false]) {
-    const f = clientFixture(true, { caches: { async open(name) { assert.match(name, /beat-this-final0-ort-1.23.2-v1$/); return { async match() { return saved ? { status: 200 } : undefined; } }; } } });
+    const f = clientFixture(true, { caches: { async open(name) { assert.match(name, /beat-this-small0-ort-1.23.2-cpu-v2$/); return { async match() { return saved ? { status: 200 } : undefined; } }; } } });
     await f.client.start(f.context, f.source); await new Promise(resolve => setImmediate(resolve));
     assert.match(f.storage.at(-1), saved ? /保存済み/ : /保存未完了/); f.client.stop();
   }

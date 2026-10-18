@@ -78,7 +78,7 @@ function synthesize(file, meter) {
     await page.selectOption('#analysis-engine', 'beat-this'); await page.click('#start');
     await page.waitForFunction(() => window.beatNetTest().beatNetState?.time >= 8, null, { timeout: 60000 });
     await page.waitForFunction(() => window.beatNetTest().beatThisStorageStatus.includes('保存済み'));
-    for (const name of ['beat-this.onnx', 'beat-this.mjs', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm']) assert.equal(counts.get(name), 1, name);
+    for (const name of ['beat-this-small0.onnx', 'beat-this-cpu.mjs', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']) assert.equal(counts.get(name), 1, name);
     const downloaded = [...counts];
     console.log('PASS page setup persists model and all runtime assets once', downloaded);
     await page.click('#stop'); await context.setOffline(true); await page.reload();

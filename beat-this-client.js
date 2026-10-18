@@ -41,8 +41,8 @@
     async checkStorage() {
       let saved = false;
       try {
-        const cache = await caches.open('starlight-bell-soundanimation-beat-this-final0-ort-1.23.2-v1');
-        const files = ['beat-this.onnx', 'beat-this.mjs', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm'];
+        const cache = await caches.open('starlight-bell-soundanimation-beat-this-small0-ort-1.23.2-cpu-v2');
+        const files = ['beat-this-small0.onnx', 'beat-this-cpu.mjs', 'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm'];
         const responses = await Promise.all(files.map(file => cache.match(new URL(`./vendor/beat-this/${file}`, document.baseURI).href)));
         saved = responses.every(response => response?.status === 200);
       } catch {}
@@ -53,7 +53,7 @@
       this.context = context; this.source = source;
       if (typeof navigator !== 'undefined' && navigator.serviceWorker) await this.prepareStorage(navigator.serviceWorker);
       if (this.stopped) return;
-      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.19', document.baseURI), { type: 'module' });
+      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.20', document.baseURI), { type: 'module' });
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => this.fail('モデル準備がタイムアウトしました（通信・空きメモリを確認）'), 180000);
         this.readyReject = error => { clearTimeout(timer); reject(error); };
@@ -78,7 +78,7 @@
         worker.postMessage({ type: 'load', rate: context.sampleRate });
       });
       if (this.stopped) return;
-      await context.audioWorklet.addModule(new URL('./beatnet-capture.js?v=2026.10.18.19', document.baseURI));
+      await context.audioWorklet.addModule(new URL('./beatnet-capture.js?v=2026.10.18.20', document.baseURI));
       if (this.stopped) return;
       this.node = new AudioWorkletNode(context, 'beatnet-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       this.node.port.onmessage = ({ data }) => {

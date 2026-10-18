@@ -8,20 +8,20 @@ function fixture() {
   const data = [Uint8Array.of(1,2,3,4), Uint8Array.of(5,6,7)];
   const files = data.map((bytes, i) => ({ name: i ? 'runtime.wasm' : 'model.onnx', label: `file ${i}`, bytes: bytes.length,
     type: i ? 'application/wasm' : 'application/octet-stream', sha256: createHash('sha256').update(bytes).digest('hex') }));
-  const messages = [], stored = new Map(), fetched = []; let fail = false, quota = false, corrupt = false, clock = 0, checks = 0;
+  const messages = [], stored = new Map(), fetched = [], retired = []; let fail = false, quota = false, corrupt = false, clock = 0, checks = 0;
   const api = { ...assets, FILES: files, async valid(...args) { checks++; return assets.valid(...args); } };
   const cache = { async match(url) { return stored.get(url)?.clone(); }, async put(url, response) { if (quota) throw new DOMException('quota', 'QuotaExceededError'); stored.set(url, response.clone()); }, async delete(url) { return stored.delete(url); } };
   const self = { location: { href: 'https://example.test/app/model-setup-worker.js' }, ModelAssets: api, postMessage: m => messages.push(m) };
   vm.runInNewContext(fs.readFileSync(require.resolve('../model-setup-worker.js'), 'utf8'), {
     self, importScripts() {}, URL, AbortController, setTimeout, clearTimeout, performance: { now: () => clock += 100 },
-    caches: { open: async () => cache }, fetch: async url => {
+    caches: { open: async () => cache, delete: async name => { retired.push(name); return true; } }, fetch: async url => {
       fetched.push(url); const i = url.includes('runtime.wasm') ? 1 : 0;
       if (fail && i) return new Response('', { status: 503 });
       const bytes = corrupt ? Uint8Array.of(9) : data[i];
       return new Response(new ReadableStream({ start(controller) { for (const b of bytes) controller.enqueue(Uint8Array.of(b)); controller.close(); } }));
     }
   });
-  return { files, data, messages, stored, fetched, checks: () => checks, run: () => self.onmessage({ data: { type: 'prepare' } }),
+  return { files, data, messages, stored, fetched, retired, checks: () => checks, run: () => self.onmessage({ data: { type: 'prepare' } }),
     setFail: value => fail = value, setQuota: value => quota = value, setCorrupt: value => corrupt = value };
 }
 test('setup streams real byte progress and only declares ready after verified persistent writes', async () => {
@@ -69,4 +69,10 @@ test('verified legacy bodies remain usable when there is no room to upgrade cach
   for (let i = 0; i < f.files.length; i++) f.stored.set(assets.url(f.files[i], 'https://example.test/app/'), new Response(f.data[i]));
   f.setQuota(true); await f.run();
   assert.equal(f.messages.at(-1).type, 'ready'); assert.equal(f.fetched.length, 0); assert.equal(f.stored.size, 2);
+});
+
+test('large legacy cache is retired only after all lightweight resources are verified and saved', async () => {
+  const f = fixture(); f.setFail(true); await f.run(); assert.equal(f.retired.length, 0);
+  f.setFail(false); await f.run(); assert.deepEqual(f.retired, assets.LEGACY_CACHES);
+  assert.equal(f.messages.at(-1).type, 'ready');
 });

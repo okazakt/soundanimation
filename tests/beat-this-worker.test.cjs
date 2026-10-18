@@ -64,6 +64,21 @@ test('invalid model bytes are evicted so a bad cached download cannot fail perma
   vm.runInNewContext(code, { self, Float32Array, Uint8Array, URL, fetch: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(5) }),
     crypto: { subtle: { digest: async () => new ArrayBuffer(32) } }, caches: { async open() { return { async delete(url) { deleted.push(url); } }; } } });
   await self.onmessage({ data: { type: 'load', rate: 22050 } });
-  assert.deepEqual(deleted, ['https://example.test/app/vendor/beat-this/beat-this.onnx']);
+  assert.deepEqual(deleted, ['https://example.test/app/vendor/beat-this/beat-this-small0.onnx']);
   assert.match(messages.at(-1).message, /次の開始時.*再取得/);
+});
+test('model initialization passes verified bytes directly to CPU runtime without a Blob or GPU attempt', async () => {
+  const bytes = Uint8Array.of(1, 2, 3, 4), messages = [], calls = [];
+  const file = { name: 'small.onnx', bytes: bytes.length, sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex') };
+  const self = { location: { href: 'https://example.test/app/beat-this-worker.js' }, BeatNetCore: core,
+    ModelAssets: { ...require('../model-assets.js'), FILES: [file] }, postMessage: m => messages.push(m) };
+  const code = fs.readFileSync(require.resolve('../beat-this-worker.js'), 'utf8').replace(/^import .*;$/gm, '');
+  vm.runInNewContext(code, { self, Float32Array, Uint8Array, URL,
+    crypto: require('node:crypto').webcrypto,
+    fetch: async url => { calls.push(url); return new Response(bytes); },
+    createBeatThis: async options => { assert.deepEqual([...options.modelData], [...bytes]); assert.equal(options.executionProvider, 'wasm'); assert.equal(options.modelUrl, undefined); return {}; }
+  });
+  await self.onmessage({ data: { type: 'load', rate: 22050 } });
+  assert.deepEqual(calls, ['https://example.test/app/vendor/beat-this/small.onnx']);
+  assert.equal(messages.at(-1).type, 'ready'); assert.equal(messages.at(-1).provider, 'wasm');
 });

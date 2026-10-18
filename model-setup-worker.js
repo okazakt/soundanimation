@@ -1,5 +1,5 @@
 'use strict';
-importScripts('./model-assets.js?v=2026.10.18.19');
+importScripts('./model-assets.js?v=2026.10.18.20');
 let busy = false;
 const emit = state => self.postMessage(state);
 self.onmessage = async ({ data }) => {
@@ -18,7 +18,7 @@ self.onmessage = async ({ data }) => {
       const saved = await cache.match(assets.url(file, base));
       if (saved?.status === 200) {
         if (saved.headers.get('X-Starlight-SHA256') === file.sha256 && saved.headers.get('X-Starlight-Bytes') === String(file.bytes)) continue;
-        // Migrate previously cached v18 assets without downloading them again.
+        // Validate saved resources lacking verification metadata without downloading again.
         let bytes;
         try { bytes = await assets.read(saved, file.bytes); } catch {}
         if (bytes && await assets.valid(bytes, file)) {
@@ -53,6 +53,8 @@ self.onmessage = async ({ data }) => {
       if (!await assets.valid(bytes, file)) throw new Error('データの確認に失敗しました。再試行すると、このファイルを取得し直します。');
       report('saving', file); await cache.put(assets.url(file, base), assets.response(bytes, file));
     }
+    // Retire the large model only after all replacement resources are saved.
+    for (const name of assets.LEGACY_CACHES || []) { try { await caches.delete(name); } catch {} }
     emit({ type: 'ready', percent: 100, reused: missing.length === 0, downloadedBytes: loaded });
   } catch (error) {
     const message = error.name === 'QuotaExceededError' ? '端末に保存できませんでした。空き容量やブラウザの保存設定を確認して再試行してください。'

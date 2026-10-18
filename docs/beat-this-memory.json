@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-18",
+  "method": "Desktop headless Chromium; sum of VmRSS for renderer processes sampled every 250 ms via CDP and /proc. Shared memory may be counted more than once. This is not an iPhone measurement or a JavaScript heap measurement.",
+  "viewport": {
+    "width": 390,
+    "height": 844,
+    "deviceScaleFactor": 3
+  },
+  "baseline": {
+    "commit": "e273b8962818f7deed88092ff20264e65f0fba62",
+    "model": "final0",
+    "secondsAfterFirstResult": 16,
+    "rendererPeakMiB": {
+      "setup": 430.2265625,
+      "load": 885.140625,
+      "inference": 886.8359375
+    }
+  },
+  "lowMemory": {
+    "version": "2026.10.18.20",
+    "model": "small0",
+    "secondsAfterFirstResult": 60,
+    "rendererPeakMiB": {
+      "setup": 300.91796875,
+      "load": 516.89453125,
+      "inference": 645.44140625
+    },
+    "canvasWidth": 780,
+    "windowSeconds": 16
+  },
+  "limitations": [
+    "Synthetic microphone audio, not real music.",
+    "The small0 synthetic triple-meter case did not reliably establish 3 beats per bar; BPM was detected.",
+    "iPhone/PWA page termination has not been reproduced or verified on a physical device."
+  ]
+}
