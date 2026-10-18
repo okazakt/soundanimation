@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.17.17';
+  const VERSION = '2026.10.18.1';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -427,12 +427,12 @@
   // Online beat tracking: spectral onsets vote for a tempo, then a gently
   // corrected clock carries the beat between transients. No sound is stored.
   const rhythm = { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
-    period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0,
+    period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0,
     fluxAverage: 0, quiet: 0, onset: false, beat: false,
     previous: new Float64Array(N), votes: new Float64Array(181), events: [] };
   function resetRhythm() {
     Object.assign(rhythm, { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
-      period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0,
+      period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0,
       fluxAverage: 0, quiet: 0, onset: false, beat: false });
     rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = [];
   }
@@ -503,7 +503,7 @@
     if (stale || r.quiet > .15) r.confidence *= Math.exp(-dt / (r.quiet > .15 ? .45 : 1.2));
     if (r.confidence > .3 && r.quiet < .15) {
       while (r.nextBeat <= r.time) {
-        if (r.time - r.lastBeat > r.period * .6) { r.beat = true; r.lastBeat = r.nextBeat; }
+        if (r.time - r.lastBeat > r.period * .6) { r.beat = true; r.lastBeat = r.nextBeat; r.beatCount++; }
         r.nextBeat += r.period;
       }
       r.phase = ((r.time - (r.nextBeat - r.period)) / r.period + 1) % 1;
@@ -524,7 +524,7 @@
       id, region: id % 5, voice: Math.floor(id / 5), episode: 0,
       level: 0, presence: 0, pulse: 0, quiet: 10, collapse: 1,
       active: false, exiting: false, exitStyle: id % 4, trail: [],
-      mirrorType: 0, mirrorAlpha: 0, population: 0, colorShift: 0,
+      mirrorType: 0, mirrorAlpha: 0, population: 0, colorShift: 0, beatTurn: 0, beatHue: 0,
       shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0, groove: 0,
       phaseSpeed: (.8 + (id % 5) * .16) * (.55 + hash(id, 0, 8020) * 1.1),
       speedScale: .55 + hash(id, 0, 8020) * 1.1,
@@ -551,6 +551,19 @@
     const decay = Math.exp(-omega * dt);
     body[axis] = target + (offset + impulse * dt) * decay;
     body[velocity] = (body[velocity] - omega * impulse * dt) * decay;
+  }
+  function updateBeatExpression(f, dt) {
+    // Counted beats describe a visual phrase, not an inferred musical meter.
+    // Four beats bend the stream; eight beats carry a slower colour movement.
+    const cycle = rhythm.beatCount + rhythm.phase;
+    const turn = rhythm.confidence * (
+      Math.sin(cycle * Math.PI / 2 + f.id * .61) * .48 +
+      Math.sin(rhythm.phase * Math.PI * 2) * .1);
+    const hue = rhythm.confidence * (
+      Math.sin(cycle * Math.PI / 4 + f.id * .4) * 28 +
+      Math.cos(rhythm.phase * Math.PI * 2) * 18);
+    f.beatTurn = lerp(turn, f.beatTurn, Math.exp(-dt / .4));
+    f.beatHue = lerp(hue, f.beatHue, Math.exp(-dt / clamp(rhythm.period * .24, .12, .24)));
   }
   function updateFlocks(dt) {
     let total = 0, weighted = 0;
@@ -603,6 +616,7 @@
       f.pulse = beat ? 1 : Math.max(f.pulse * Math.exp(-dt / .3), rhythm.pulse * rhythm.confidence);
       const sway = (.5 + .5 * Math.cos(rhythm.phase * Math.PI * 2)) * rhythm.confidence;
       f.groove = lerp(sway, f.groove, Math.exp(-dt / .14));
+      updateBeatExpression(f, dt);
       f.motionLevel = lerp(f.level, f.motionLevel, Math.exp(-dt / .38));
       f.motionPulse = lerp(f.pulse, f.motionPulse, Math.exp(-dt / .12));
       // Beats still light up immediately; travel speed absorbs their impulse.
@@ -630,8 +644,10 @@
         return [Math.cos(t * .37 + f.id) * .34, Math.sin(t * .83) * .19];
       };
       const a = path(shape), b = path((shape + 1) % 5);
-      const tx = width * (.5 + lerp(a[0], b[0], mix) * extent);
-      const ty = height * (.5 + lerp(a[1], b[1], mix) * extent);
+      const px = lerp(a[0], b[0], mix), py = lerp(a[1], b[1], mix);
+      const ct = Math.cos(f.beatTurn), st = Math.sin(f.beatTurn);
+      const tx = width * (.5 + (px * ct - py * st) * extent);
+      const ty = height * (.5 + (px * st + py * ct) * extent);
       springAxis(f, 'x', 'vx', tx, 7, dt);
       springAxis(f, 'y', 'vy', ty, 7, dt);
       if (Math.hypot(f.vx, f.vy) > 3) {
@@ -721,7 +737,10 @@
         // Substeps bound acceleration and keep the simulation stable on slow
         // frames. Neighbour alignment acts gently alongside the shared flow.
         const a = field(shape), b = field((shape + 1) % 5);
-        let flowX = lerp(a[0], b[0], mix), flowY = lerp(a[1], b[1], mix);
+        const localX = lerp(a[0], b[0], mix) - f.vx, localY = lerp(a[1], b[1], mix) - f.vy;
+        const bend = f.beatTurn * .35;
+        let flowX = f.vx + localX * Math.cos(bend) - localY * Math.sin(bend);
+        let flowY = f.vy + localX * Math.sin(bend) + localY * Math.cos(bend);
         if (neighbours) { flowX = lerp(flowX, alignX, .16); flowY = lerp(flowY, alignY, .16); }
         flowX += repelX * 70; flowY += repelY * 70;
         const steps = Math.max(1, Math.ceil(dt * 120)), h = dt / steps;
@@ -765,10 +784,10 @@
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
       const tone = clamp(p.band / (N - 1) + (p.tint - .5) * .28 + f.colorShift + p.strength * .07, 0, 1);
-      const hue = 32 + tone * 270;
+      const hue = (32 + tone * 270 + f.beatHue + 360) % 360;
       const radius = p.size * (.8 + p.strength * 1.15 + f.pulse * .65) * (1 - f.collapse * .65);
       const glow = 12 + radius * 3;
-      const colorIndex = Math.round(tone * (glows.length - 1));
+      const colorIndex = Math.round(clamp(tone + f.beatHue / 270, 0, 1) * (glows.length - 1));
       const copies = [[p.x, p.y, 1]];
       if (f.mirrorAlpha > .005) copies.push([p.mirrorX, p.mirrorY, f.mirrorAlpha]);
       for (const [x, y, opacity] of copies) {

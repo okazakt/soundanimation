@@ -37,9 +37,10 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
+    stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -78,7 +79,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.17.17'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.1'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -311,4 +312,25 @@ test('sustained sound and irregular accents do not assert a confident tempo', ()
   assert.ok(f.inspect().rhythm.confidence < .3);
   f.nodes['#next-mode'].click();
   assert.equal(f.inspect().rhythm.confidence, 0);
+});
+
+test('recognised beats bend trajectories and change hue smoothly, fading with confidence', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const { rhythm, flocks } = f.inspect();
+  const g = flocks[0];
+  rhythm.period = .5;
+  const turns = [], hues = [];
+  for (let i = 0; i < 480; i++) {
+    const cycles = i / 30;
+    rhythm.beatCount = Math.floor(cycles); rhythm.phase = cycles % 1; rhythm.confidence = 1;
+    const before = g.beatTurn;
+    f.stepBeatExpression(g, 1 / 60);
+    turns.push(g.beatTurn); hues.push(g.beatHue);
+    assert.ok(Math.abs(g.beatTurn - before) < .03, 'steering changes gradually');
+  }
+  assert.ok(Math.max(...turns) - Math.min(...turns) > .5);
+  assert.ok(Math.max(...hues) - Math.min(...hues) > 40);
+  rhythm.confidence = 0;
+  for (let i = 0; i < 240; i++) f.stepBeatExpression(g, 1 / 60);
+  assert.ok(Math.abs(g.beatTurn) < .001 && Math.abs(g.beatHue) < .001);
 });

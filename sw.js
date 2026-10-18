@@ -1,9 +1,9 @@
 'use strict';
 // All cache operations and requests stay within this application's directory.
 const PREFIX = 'starlight-bell-soundanimation-';
-const CACHE = PREFIX + 'v2026.10.17.17';
+const CACHE = PREFIX + 'v2026.10.18.1';
 const BASE = new URL('./', self.location.href);
-const ASSETS = ['./', './index.html', './style.css?v=2026.10.17.17', './app.js?v=2026.10.17.17', './manifest.json', './icons/192x192.png', './icons/512x512.png'].map(path => new URL(path, BASE).href);
+const ASSETS = ['./', './index.html', './style.css?v=2026.10.18.1', './app.js?v=2026.10.18.1', './manifest.json', './icons/192x192.png', './icons/512x512.png'].map(path => new URL(path, BASE).href);
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
 });
