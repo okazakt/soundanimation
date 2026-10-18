@@ -38,11 +38,12 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood });\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood });\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
+    stepColourBreath: (dt, audible = true) => window.stepColourBreath(dt, audible),
     stepMood: (values, dt) => window.stepMood(values, dt), colour: (p, g) => window.particleColour(p, g),
     chooseGate: (...args) => window.chooseFlockGate(...args),
     stepScene: (values, raw, dt) => window.stepScene(values, raw, dt),
@@ -85,7 +86,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.6'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.7'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -537,4 +538,41 @@ test('tonal evidence distinguishes major-like and minor-like chord spectra as a 
   }
   const major = estimate([60, 64, 67]), minor = estimate([60, 63, 67]);
   assert.ok(major > minor + .1, `major ${major}, minor ${minor}`);
+});
+
+test('persistent mood periodically opens to unbiased colour and returns smoothly without changing the estimate', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const { mood, flocks } = f.inspect();
+  Object.assign(mood, { warmth: -.9, confidence: 1 });
+  let previous = 1, openSeconds = 0, returned = false;
+  const gains = [];
+  for (let i = 0; i < 450; i++) {
+    f.stepColourBreath(.1);
+    const gain = mood.colourBiasGain;
+    assert.ok(Math.abs(gain - previous) < .1, 'no abrupt colour switch');
+    if (gain === 0) openSeconds += .1;
+    if (openSeconds > 1.5 && gain === 1) returned = true;
+    gains.push(gain); previous = gain;
+  }
+  assert.ok(openSeconds > 3 && returned && mood.colourCycle >= 2);
+  assert.equal(mood.warmth, -.9, 'the mood is still inferred while colour opens');
+  const p = flocks[0].particles.find(p => !p.colorRebel), g = flocks[0];
+  mood.colourBiasGain = 0; const open = f.colour(p, g).hue;
+  mood.warmth = .8; const openAfterMoodChange = f.colour(p, g).hue;
+  assert.equal(open, openAfterMoodChange, 'open phase removes the distribution bias');
+  mood.colourBiasGain = 1;
+  assert.notEqual(f.colour(p, g).hue, open, 'return follows the latest mood');
+});
+test('colour breathing waits for a recognised bar boundary with a bounded fallback', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const { mood, rhythm } = f.inspect();
+  Object.assign(rhythm, { confidence: 1, meterConfidence: .9, beat: true, beatInBar: 3, period: .5 });
+  for (let i = 0; i < 105; i++) f.stepColourBreath(.1);
+  assert.equal(mood.colourStage, 0);
+  rhythm.beatInBar = 1; f.stepColourBreath(.1);
+  assert.equal(mood.colourStage, 1);
+  f.stepColourBreath(.1, false);
+  assert.equal(mood.colourStage, 0);
+  f.nodes['#next-mode'].click();
+  assert.equal(mood.colourBiasGain, 1); assert.equal(mood.colourCycle, 0);
 });

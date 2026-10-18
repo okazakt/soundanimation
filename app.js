@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.6';
+  const VERSION = '2026.10.18.7';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -571,12 +571,12 @@
   // Musical mood is a slow, uncertain audio-feature estimate, not a claim
   // about the listener's emotion or the meaning of lyrics.
   const mood = { warmth: 0, activity: .35, tension: .2, confidence: 0,
-    keyBias: 0, time: 0, analysisTime: 0, chroma: new Float64Array(12) };
+    keyBias: 0, time: 0, analysisTime: 0, colourBiasGain: 1, colourStage: 0, colourAge: 0, colourCycle: 0, nextColourRelease: 10, colourOut: 2, colourHold: 2, colourReturn: 3, chroma: new Float64Array(12) };
   const majorProfile = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
   const minorProfile = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
   function resetMood() {
     Object.assign(mood, { warmth: 0, activity: .35, tension: .2, confidence: 0,
-      keyBias: 0, time: 0, analysisTime: 0 }); mood.chroma.fill(0);
+      keyBias: 0, time: 0, analysisTime: 0, colourBiasGain: 1, colourStage: 0, colourAge: 0, colourCycle: 0, nextColourRelease: 10, colourOut: 2, colourHold: 2, colourReturn: 3 }); mood.chroma.fill(0);
   }
   function tonalScore(profile, root) {
     const mean = mood.chroma.reduce((a, b) => a + b, 0) / 12;
@@ -587,6 +587,41 @@
       xy += x * y; xx += x * x; yy += y * y;
     }
     return xy / Math.max(1e-9, Math.sqrt(xx * yy));
+  }
+  function updateColourBreath(dt, audible) {
+    const m = mood;
+    if (!audible) {
+      m.colourStage = 0; m.colourAge = 0; m.nextColourRelease = m.time + 10;
+      m.colourBiasGain = lerp(1, m.colourBiasGain, Math.exp(-dt / .8)); return;
+    }
+    if (m.colourStage === 0) {
+      m.colourBiasGain = lerp(1, m.colourBiasGain, Math.exp(-dt / .8));
+      if (m.time < m.nextColourRelease) return;
+      const boundary = rhythm.confidence < .35 || (rhythm.beat &&
+        (rhythm.meterConfidence < .5 || rhythm.beatInBar === 1));
+      if (!boundary && m.time - m.nextColourRelease < 2.2) return;
+      m.colourStage = 1; m.colourAge = 0; m.colourCycle++;
+      const period = rhythm.confidence > .35 ? rhythm.period : .55;
+      m.colourOut = clamp(period * 4, 1.8, 3);
+      m.colourHold = clamp(period * 4, 1.6, 2.5);
+      m.colourReturn = clamp(period * 6, 2.5, 4);
+    }
+    m.colourAge += dt;
+    if (m.colourStage === 1) {
+      const p = clamp(m.colourAge / m.colourOut, 0, 1);
+      m.colourBiasGain = .5 + .5 * Math.cos(Math.PI * p);
+      if (p === 1) { m.colourStage = 2; m.colourAge = 0; }
+    } else if (m.colourStage === 2) {
+      m.colourBiasGain = 0;
+      if (m.colourAge >= m.colourHold) { m.colourStage = 3; m.colourAge = 0; }
+    } else {
+      const p = clamp(m.colourAge / m.colourReturn, 0, 1);
+      m.colourBiasGain = .5 - .5 * Math.cos(Math.PI * p);
+      if (p === 1) {
+        m.colourStage = 0; m.colourAge = 0;
+        m.nextColourRelease = m.time + 8 + Math.sin(m.colourCycle * 1.73) * 3 + m.activity * 2;
+      }
+    }
   }
   function updateMood(dt) {
     const m = mood; m.time += dt; m.analysisTime += dt;
@@ -603,6 +638,7 @@
       }
     }
     const mean = total / N;
+    updateColourBreath(dt, mean >= .003);
     if (mean < .003) {
       m.confidence *= Math.exp(-dt / 3); return;
     }
@@ -636,7 +672,7 @@
     const coordinate = p.tint + p.baseTone * .23 + f.id * .093 + f.colorShift * .15 + mood.time * .0015;
     const baseHue = ((coordinate % 1) + 1) % 1 * 360;
     const centre = (125 - mood.warmth * 115 + mood.activity * 35 + mood.tension * 65 + mood.keyBias * 25 + 360) % 360;
-    const bias = Math.min(.9, Math.abs(mood.warmth) * .9 * mood.confidence);
+    const bias = Math.min(.9, Math.abs(mood.warmth) * .9 * mood.confidence) * mood.colourBiasGain;
     // With bias < 1 radian this warp stays continuous and one-to-one over
     // the whole circle: even the least preferred colours remain possible.
     let hue = baseHue + bias * Math.sin((centre - baseHue) * Math.PI / 180) * 180 / Math.PI;
