@@ -38,7 +38,7 @@ function fixture(getMicrophone, options = {}) {
     assert.equal(constraints.audio.noiseSuppression, false);
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
-  const window = { BeatNetClient: options.beatNetClient, AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
+  const window = { BeatNetClient: options.beatNetClient, BeatThisClient: options.beatThisClient, AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
   // Reproducible visual variation keeps coverage independent of session RNG.
   let randomState = options.randomSeed ?? 0x12345678;
   const deterministicMath = Object.create(Math);
@@ -175,13 +175,13 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.16'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.17'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
   assert.deepEqual(deleted, ['starlight-bell-soundanimation-v0']);
   await new Promise(resolve => events.install({ waitUntil: p => p.then(resolve) }));
-  assert.equal(cached.length, 18);
+  assert.equal(cached.length, 21);
   assert.ok(cached.some(url => url.endsWith('/vendor/beatnet/model-1.f32')));
   assert.ok(cached.every(url => url.startsWith('https://example.com/soundanimation/')));
   for (const url of ['https://example.com/', 'https://example.com/script.js', 'https://other.test/soundanimation/app.js', 'https://example.com/soundanimation/unknown']) {
@@ -1064,5 +1064,32 @@ test('BeatNet initialization failure retains microphone visualization and report
   assert.match(f.nodes['#debug-engine'].textContent, /model unavailable.*従来方式/);
   assert.equal(f.inspect().rhythm.engine, 'basic');
   assert.equal(f.nodes['#stop'].disabled, false);
+  f.nodes['#stop'].click();
+});
+
+test('Beat This uses delayed estimates between updates, then expires them and cancels late results', async () => {
+  const clients = [];
+  class FakeBeatThis {
+    constructor(emit) { this.emit = emit; clients.push(this); }
+    async start() {}
+    stop() { this.stopped = true; }
+  }
+  const f = fixture(async stream => stream, { width: 8, height: 8, beatThisClient: FakeBeatThis });
+  f.nodes['#analysis-engine'].value = 'beat-this';
+  await f.nodes['#start'].click(); await flush();
+  f.inspect().audio.currentTime = 20;
+  f.inspect().basicRhythm.quiet = 0;
+  clients[0].emit({ time: 16, windowSeconds: 16, audioTime: 18, receivedAudioTime: 20, lastBeatAudioTime: 17.2,
+    bpm: 120, confidence: .9, beatCount: 30, beatInBar: 2, meter: 3, meterConfidence: .9,
+    beatProbability: .9, downProbability: .1, meterMass: [0, 1, 0], processingMs: 2000 });
+  await f.tick(); assert.equal(f.inspect().rhythm.engine, 'beat-this');
+  assert.equal(f.inspect().rhythm.meter, 3);
+  f.inspect().audio.currentTime = 23; f.inspect().basicRhythm.quiet = 0;
+  await f.tick(); assert.equal(f.inspect().rhythm.engine, 'beat-this', 'must bridge normal multi-second inference intervals');
+  f.inspect().audio.currentTime = 29; await f.tick();
+  assert.equal(f.inspect().rhythm.engine, 'basic', 'stale estimates expire even if audio remains audible');
+  f.nodes['#analysis-engine'].value = 'basic'; f.nodes['#analysis-engine'].change();
+  assert.ok(clients[0].stopped); clients[0].emit({ bpm: 200 });
+  assert.equal(f.inspect().beatNetState, null);
   f.nodes['#stop'].click();
 });

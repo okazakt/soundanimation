@@ -1,14 +1,15 @@
 'use strict';
 // All cache operations and requests stay within this application's directory.
 const PREFIX = 'starlight-bell-soundanimation-';
-const CACHE = PREFIX + 'v2026.10.18.16';
+const CACHE = PREFIX + 'v2026.10.18.17';
 const BASE = new URL('./', self.location.href);
 const ASSETS = [
-  './', './index.html', './style.css?v=2026.10.18.16', './app.js?v=2026.10.18.16',
-  './beatnet-client.js?v=2026.10.18.16', './beatnet-worker.js?v=2026.10.18.16',
-  './beatnet-core.js?v=2026.10.18.16', './beatnet-capture.js?v=2026.10.18.16',
+  './', './index.html', './style.css?v=2026.10.18.17', './app.js?v=2026.10.18.17',
+  './beatnet-client.js?v=2026.10.18.17', './beatnet-worker.js?v=2026.10.18.17',
+  './beatnet-core.js?v=2026.10.18.17', './beatnet-capture.js?v=2026.10.18.17',
   './vendor/beatnet/model-1.f32', './vendor/beatnet/manifest.json', './vendor/beatnet/frontend.json',
   './vendor/beatnet/LICENSE.txt', './vendor/beatnet/NOTICE.md', './vendor/beatnet/MADMOM-LICENSE.txt',
+  './beat-this-client.js?v=2026.10.18.17', './beat-this-worker.js?v=2026.10.18.17', './beat-this-rhythm.js?v=2026.10.18.17',
   './licenses.html', './manifest.json', './icons/192x192.png', './icons/512x512.png'
 ].map(path => new URL(path, BASE).href);
 self.addEventListener('install', event => {
