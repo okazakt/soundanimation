@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.24';
+  const VERSION = '2026.10.18.25';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -722,7 +722,9 @@
     const brightness = weighted / Math.max(.001, total);
     const rms = Math.sqrt(squares / N);
     const tempo = rhythm.bpm ? clamp((rhythm.bpm - 70) / 100, 0, 1) : .35;
-    const activity = clamp(tempo * rhythm.confidence * .55 + rms * 1.6 + rhythm.fluxAverage * 5, 0, 1);
+    // Input gain adapts to the room, so loudness alone cannot classify energy.
+    const attackDrive=clamp(rhythm.fluxAverage/Math.max(.02,rms)*8,0,1);
+    const activity=clamp(tempo*rhythm.confidence*.45+attackDrive*.35+clamp(rms*.9,0,1)*.20,0,1);
     const flatness = Math.exp(logs / N) / Math.max(.00001, mean);
     m.brightness = lerp(brightness, m.brightness, Math.exp(-dt / 1));
     m.flatness = lerp(flatness, m.flatness, Math.exp(-dt / 1));
@@ -786,7 +788,7 @@
     const wander = Math.sin(mood.time * .17 + p.colorPhase) * 3;
     hue = (hue + f.beatHue * .55 + wander + 720) % 360;
     const saturation = clamp(66 + mood.activity * 20 + (p.tint - .5) * 12 - mood.tension * 5, 45, 92);
-    const lightness = clamp(60 + p.strength * 19 - mood.tension * 4 + (p.tint - .5) * 6, 48, 83);
+    const lightness = clamp(60 + p.strength * 19 - mood.tension * 4 + f.danceAccent*(2+mood.activity*3) + (p.tint - .5) * 6, 48, 83);
     const spriteHues = moodSpriteHues;
     let sprite = 0, distance = Infinity;
     spriteHues.forEach((h, i) => {
@@ -985,6 +987,7 @@
       active: false, gate: false, pendingGate: null, pendingSince: 0, gateChangedAt: -10, safetyUntil: 0,
       exiting: false, exitStyle: id % 4, trail: [],
       mirrorType: 0, mirrorAlpha: 0, population: 0, colorShift: 0, beatTurn: 0, beatHue: 0,
+      danceX: 0, danceY: 0, danceSwirl: 0, danceAccent: 0, danceSpread: 1, danceEnergy: .5,
       shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0, groove: 0,
       phaseSpeed: (.8 + (id % 5) * .16) * (.55 + hash(id, 0, 8020) * 1.1),
       speedScale: .55 + hash(id, 0, 8020) * 1.1,
@@ -1024,25 +1027,25 @@
       if (side === 2) { x = width * u; y = -margin; }
       if (side === 3) { x = width * u; y = height + margin; }
     }
-    const speed = particleSpeedLimit() * .24;
-    Object.assign(p, { x, y, vx: Math.cos(p.angle) * speed, vy: Math.sin(p.angle) * speed,
+    const speed=particleSpeedLimit()*(.18+f.danceEnergy*.15);
+    const angle=kind>=2?Math.atan2(focus.y-y,focus.x-x)+(p.tint-.5)*.6:p.angle;
+    Object.assign(p, { x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
       mirrorX: x, mirrorY: y, mvx: 0, mvy: 0,
       travelState: 0, travelTarget: -1, guestUntil: 0,
       tailCount: 0, tailHead: 0, tailTime: -10, seeded: true });
   }
   function updateBeatExpression(f, dt) {
-    // Counted beats describe a visual phrase, not an inferred musical meter.
-    // Four beats bend the stream; eight beats carry a slower colour movement.
-    const cycle = rhythm.beatCount + rhythm.phase;
-    const turn = rhythm.confidence * (
-      Math.sin(cycle * Math.PI / 2 + f.id * .61) * .48 +
-      Math.sin(rhythm.phase * Math.PI * 2) * .1);
-    const hue = rhythm.confidence * (
-      Math.sin(cycle * Math.PI / 4 + f.id * .4) * 28 +
-      Math.cos(rhythm.phase * Math.PI * 2) * 18);
-    f.beatTurn = lerp(turn, f.beatTurn, Math.exp(-dt / .4));
-    f.beatHue = lerp(hue, f.beatHue, Math.exp(-dt / clamp(rhythm.period * .24, .12, .24)));
+    const dance=window.DanceMotion.sample(rhythm,mood,f.id,elapsed);
+    const stepDecay=Math.exp(-dt/clamp(rhythm.period*.22,.1,.22));
+    f.danceEnergy=lerp(dance.energy,f.danceEnergy,Math.exp(-dt/1.2));
+    f.danceX=lerp(dance.x,f.danceX,stepDecay);f.danceY=lerp(dance.y,f.danceY,stepDecay);
+    f.danceSwirl=lerp(dance.swirl,f.danceSwirl,Math.exp(-dt/.3));
+    f.danceAccent=lerp(dance.accent,f.danceAccent,stepDecay);
+    f.danceSpread=lerp(dance.spread,f.danceSpread,Math.exp(-dt/.22));
+    f.beatTurn=lerp(dance.turn,f.beatTurn,Math.exp(-dt/.4));
+    f.beatHue=lerp(dance.hue,f.beatHue,Math.exp(-dt/clamp(rhythm.period*.24,.12,.24)));
   }
+
   function chooseFlockGate(f, wanted, audible, safety, now) {
     if (!audible) { f.gate = false; f.pendingGate = null; return false; }
     if (safety) {
@@ -1104,8 +1107,8 @@
       // Independent voices enter and leave on long phrases. Rich/loud bands can
       // add a second voice; a sparse note does not create every flock at once.
       const phraseClock = elapsed / (9 + f.id * .47) + f.id * .173;
-      const window = phraseClock % 1;
-      const enabled = selected.has(f.id) && (f.voice === 0 ? window < .82 : window > .18 && window < .72 && drive > .25);
+      const phrasePosition = phraseClock % 1;
+      const enabled = selected.has(f.id) && (f.voice === 0 ? phrasePosition < .82 : phrasePosition > .18 && phrasePosition < .72 && drive > .25);
       const safety = rescue && f.id === strongest;
       const gate = chooseFlockGate(f, enabled, drive > .035, safety, elapsed);
       const target = gate ? drive : 0;
@@ -1115,13 +1118,16 @@
           if (p.alpha < .005) { p.alpha = 0; p.seeded = false; }
         });
         // Blank-screen recovery emits at the focus; it never relocates live particles.
-        f.entryStyle = safety ? 0 : (f.id + f.episode) % 4;
+        const styles=window.DanceMotion.styles(mood,
+          hash(f.id,f.episode,8060),hash(f.id,f.episode,8061),
+          hash(f.id,f.episode,8062),hash(f.id,f.episode,8063));
+        f.entryStyle=safety?0:styles.entryStyle;
+        f.exitStyle=styles.exitStyle;
         f.entryStarted = elapsed;
         if (f.presence < .001) {
           f.x = focus.x; f.y = focus.y; f.vx = f.vy = 0;
         }
         f.episode++;
-        f.exitStyle = (f.id + f.episode - 1) % 4;
       }
       f.active = target > .035;
       f.level = lerp(target, f.level, Math.exp(-dt / (target > f.level ? .09 : .45)));
@@ -1142,7 +1148,7 @@
       f.motionLevel = lerp(f.level, f.motionLevel, Math.exp(-dt / .38));
       f.motionPulse = lerp(f.pulse, f.motionPulse, Math.exp(-dt / .12));
       // Beats still light up immediately; travel speed absorbs their impulse.
-      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25 + f.motionPulse * .7 + f.groove * .4) * f.speedScale * rhythm.motionScale;
+      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25 + f.motionPulse * .7 + f.groove * .4) * f.speedScale * rhythm.motionScale * (.80+f.danceEnergy*.36);
       f.phaseSpeed = lerp(speedTarget, f.phaseSpeed, Math.exp(-dt / .5));
       f.phase += dt * f.phaseSpeed;
       const t = f.phase;
@@ -1168,8 +1174,9 @@
       const a = path(shape), b = path((shape + 1) % 5);
       const px = lerp(a[0], b[0], mix), py = lerp(a[1], b[1], mix);
       const ct = Math.cos(f.beatTurn), st = Math.sin(f.beatTurn);
-      const tx = width * (.5 + (px * ct - py * st) * extent);
-      const ty = height * (.5 + (px * st + py * ct) * extent);
+      const danceStep=Math.min(width,height)*(.035+.035*f.danceEnergy);
+      const tx=width*(.5+(px*ct-py*st)*extent)+f.danceX*danceStep;
+      const ty=height*(.5+(px*st+py*ct)*extent)+f.danceY*danceStep;
       advanceLeader(f, tx, ty, dt);
       if (Math.hypot(f.vx, f.vy) > 3) {
         const desired = Math.atan2(f.vy, f.vx);
@@ -1180,7 +1187,7 @@
       f.trail.unshift({ x: f.x, y: f.y, time: elapsed });
       while (f.trail.length > 2 && f.trail[f.trail.length - 2].time < elapsed - 1.6) f.trail.pop();
       const radius = Math.min(width, height) * (.10 + f.motionLevel * .20) * f.scale *
-        (1 + f.motionPulse * .5 + f.groove * .18) * (.8 + .2 * Math.sin(t * .4 + f.id));
+        (1 + f.motionPulse * .5 + f.groove * .18) * f.danceSpread * (.8 + .2 * Math.sin(t * .4 + f.id));
       const count = f.exiting ? f.exitPopulation : Math.round(16 + f.level * (64 + 48 * (.5 + .5 * Math.sin(t * .24 + f.id))));
       f.population = count; f.radius = radius;
       const symmetryChoice = Math.floor(hash(f.id, f.episode, 8022) * 7);
@@ -1256,7 +1263,7 @@
         }
         if (neighbours) { alignX /= neighbours; alignY /= neighbours; }
         const speed = (50 + f.motionLevel * 65 + f.motionPulse * 18 + f.groove * 24) * f.speedScale *
-          (.75 + p.tint * .5) * Math.min(width, height) / 390 * rhythm.motionScale;
+          (.75 + p.tint * .5) * Math.min(width, height) / 390 * rhythm.motionScale * (.80+f.danceEnergy*.36);
         const rotation = f.id % 2 ? -1 : 1;
         // These are velocity fields evaluated at the particle's CURRENT
         // position. No particle is assigned an angle or a place on a shape.
@@ -1301,6 +1308,12 @@
         let flowY = f.vy + localX * Math.sin(bend) + localY * Math.cos(bend);
         if (neighbours) { flowX = lerp(flowX, alignX, .08 + p.cohesion * .15); flowY = lerp(flowY, alignY, .08 + p.cohesion * .15); }
         flowX += repelX * 70; flowY += repelY * 70;
+        if(!f.exiting && !p.travelState) {
+          const participation=.65+p.tint*.35;
+          const dx=p.x-f.x,dy=p.y-f.y,d=Math.max(20,Math.hypot(dx,dy));
+          flowX+=speed*participation*(f.danceX*.48-dy/d*f.danceSwirl*.34);
+          flowY+=speed*participation*(f.danceY*.58+dx/d*f.danceSwirl*.34);
+        }
         if (p.travelState === 1) {
           flowX = p.vx * .4 + f.vx * .3 + Math.cos(p.driftAngle) * speed * 1.5;
           flowY = p.vy * .4 + f.vy * .3 + Math.sin(p.driftAngle) * speed * 1.5;
@@ -1311,9 +1324,9 @@
           flowX = host.vx + dx / d * travelSpeed;
           flowY = host.vy + dy / d * travelSpeed;
         }
-        if (!f.exiting && !p.travelState && p.tint < .28) {
+        if (!f.exiting && !p.travelState && p.tint < .18+(1-f.danceEnergy)*.4) {
           const point = focus.satellites.length && p.tint < .12 ? focus.satellites[f.id % focus.satellites.length] : focus;
-          const strength = point.strength * focus.strength * .22;
+          const strength=point.strength*focus.strength*(.10+(1-f.danceEnergy)*.22);
           flowX += (point.x - p.x) * strength; flowY += (point.y - p.y) * strength;
         }
         const steps = Math.max(1, Math.ceil(dt * 120)), h = dt / steps;
@@ -1332,8 +1345,8 @@
             vx += (Math.max(0, margin - p.x) - Math.max(0, p.x - width + margin)) * 5;
             vy += (Math.max(0, margin - p.y) - Math.max(0, p.y - height + margin)) * 5;
           }
-          let ax = (vx - p.vx) / (f.exiting ? (f.exitStyle % 2 ? .16 : .1) : .48);
-          let ay = (vy - p.vy) / (f.exiting ? (f.exitStyle % 2 ? .16 : .1) : .48);
+          let ax = (vx - p.vx) / (f.exiting ? (f.exitStyle % 2 ? .16 : .1) : (.62-f.danceEnergy*.24));
+          let ay = (vy - p.vy) / (f.exiting ? (f.exitStyle % 2 ? .16 : .1) : (.62-f.danceEnergy*.24));
           const limit = f.exiting ? 2600 : 350 * Math.min(width, height) / 390;
           const factor = Math.min(1, limit / Math.max(1, Math.hypot(ax, ay)));
           p.vx += ax * factor * h; p.vy += ay * factor * h;
@@ -1391,7 +1404,7 @@
   }
   function drawFlocks() {
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-    const hue = 285 - backgroundTone * 135;
+    const hue=285-backgroundTone*135-mood.warmth*mood.confidence*22+(1-mood.activity)*10;
     const sky = ctx.createLinearGradient(0, 0, width * .3, height);
     sky.addColorStop(0, `hsl(${hue},48%,${3 + backgroundEnergy * 5}%)`);
     sky.addColorStop(1, `hsl(${hue + 35},55%,${7 + backgroundEnergy * 12}%)`);
@@ -1401,7 +1414,7 @@
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
       const colour = particleColour(p, f), hue = colour.hue;
-      const radius = p.size * (.8 + p.strength * 1.15 + f.pulse * .65) * (1 - f.collapse * .65);
+      const radius = p.size * (.8 + p.strength * 1.15 + f.pulse * .65 + f.danceAccent*.16) * (1 - f.collapse * .65);
       const glow = 12 + radius * 3;
       const colorIndex = colour.sprite;
       const copies = [[p.x, p.y, 1]];
@@ -1414,7 +1427,8 @@
         ctx.drawImage(glows[colorIndex][2], x - glow, y - glow, glow * 2, glow * 2);
         ctx.globalAlpha = p.alpha * opacity * (.6 + p.strength * .4);
         ctx.fillStyle = `hsl(${hue},${colour.saturation}%,${colour.lightness}%)`;
-        ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+        const squash=clamp(f.danceY*.14,-.12,.12);
+        ctx.beginPath(); ctx.ellipse(x,y,radius*(1+squash),radius*(1-squash),f.heading*.15,0,Math.PI*2); ctx.fill();
       }
     }
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';

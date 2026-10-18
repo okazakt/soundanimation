@@ -39,7 +39,7 @@ function fixture(getMicrophone, options = {}) {
     assert.equal(constraints.audio.noiseSuppression, false);
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
-  const window = { BeatClock: require('../beat-clock.js').BeatClock, BeatThisClient: options.beatThisClient, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: options.dpr || 2, addEventListener(type, fn) { events[type] = fn; } };
+  const window = { DanceMotion: require('../dance-motion.js'), BeatClock: require('../beat-clock.js').BeatClock, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: options.dpr || 2, addEventListener(type, fn) { events[type] = fn; } };
   // Reproducible visual variation keeps coverage independent of session RNG.
   let randomState = options.randomSeed ?? 0x12345678;
   const deterministicMath = Object.create(Math);
@@ -176,7 +176,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.24'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.25'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -852,4 +852,28 @@ test('fresh neural beats on adaptively audible low input are not vetoed by a raw
   for(let i=0;i<50;i++) await f.tick(.02);
   assert.equal(f.inspect().rhythm.engine,'basic');
   f.nodes['#stop'].click();
+});
+test('mood changes steer future entrances while live individuals keep their chosen choreography and momentum',()=>{
+  const f=fixture(async stream=>stream,{width:390,height:740});
+  const {mood}=f.inspect();Object.assign(mood,{activity:.95,tension:.6,confidence:1});
+  const values=new Float64Array(512).fill(.3);
+  f.stepScene(values,values,.1);
+  const g=f.inspect().flocks.find(g=>g.active && g.voice===0);
+  const styles=[g.entryStyle,g.exitStyle];
+  const live=g.particles.find(p=>p.alpha>.01);
+  const before={x:live.x,y:live.y};
+  Object.assign(mood,{activity:.05,tension:.1});f.stepScene(values,values,.1);
+  assert.deepEqual([g.entryStyle,g.exitStyle],styles,'a mood change does not rewrite a live entrance or departure');
+  assert.ok(Math.hypot(live.x-before.x,live.y-before.y)<=f.speedLimit()*.1+1e-6);
+  assert.ok(f.inspect().flocks.every(g=>[g.danceX,g.danceY,g.danceSpread,g.danceEnergy].every(Number.isFinite)));
+});
+test('music energy uses tempo and relative attacks rather than treating amplified sustained input as energetic',()=>{
+  const f=fixture(async stream=>stream,{width:8,height:8});
+  const {rhythm,mood}=f.inspect();const sustained=new Float64Array(512).fill(.6);
+  for(let i=0;i<100;i++) f.stepMood(sustained,.1);
+  const calm=mood.activity;assert.ok(calm<.25);
+  Object.assign(rhythm,{bpm:170,confidence:.95,fluxAverage:.05});
+  const rhythmic=new Float64Array(512).fill(.25);
+  for(let i=0;i<100;i++) f.stepMood(rhythmic,.1);
+  assert.ok(mood.activity>.7 && mood.activity>calm*2.5);
 });
