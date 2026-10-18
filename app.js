@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.27';
+  const VERSION = '2026.10.18.28';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -948,10 +948,9 @@
   }
   function updateFocus(dt, audible) {
     if (audible) focus.phase += Math.PI * 2 * dt / Math.max(3.5, (rhythm.bpm ? rhythm.period : .75) * 8);
-    const centre=focus.path.update(rhythm,dt);
-    focus.stageX=width*centre.x;focus.stageY=width*centre.y;
+    focus.breath=focus.pulseClock.update(rhythm,dt);
     focus.x=width*.5;
-    focus.y=height*.5+Math.sin(focus.phase)*Math.min(26,height*.055)*(1-focus.path.gain);
+    focus.y=height*.5;
     focus.strength = lerp(audible ? 1 : 0, focus.strength, Math.exp(-dt / .8));
     focus.satellites.forEach(point => {
       point.age += dt; point.strength = Math.sin(Math.PI * clamp(point.age / point.life, 0, 1)) ** 2;
@@ -980,7 +979,7 @@
     }
   }
   function prepareFlocks() {
-    Object.assign(focus, { x: width / 2, y: height / 2, phase: 0, strength: 0, satellites: [], next: 7, cycle: 0, stageX: 0, stageY: 0, path: new window.DanceMotion.CentrePath() });
+    Object.assign(focus, { x: width / 2, y: height / 2, phase: 0, strength: 0, satellites: [], next: 7, cycle: 0, breath: {wave:0,participation:2/3}, pulseClock: new window.DanceMotion.BreathingPulse() });
     beatCooldown = 0;
     backgroundTone = .5; backgroundEnergy = 0;
     flocks = Array.from({ length: 10 }, (_, id) => ({
@@ -1002,7 +1001,7 @@
       particles: Array.from({ length: 128 }, (_, j) => ({
         band: flockRanges[id % 5] + Math.floor(hash(id, j, 8005) * (flockRanges[id % 5 + 1] - flockRanges[id % 5])),
         angle: j * 2.3999632297, distance: Math.sqrt(hash(id, j, 8010)),
-        tint: hash(id, j, 8021), colorRebel: hash(id, j, 8040) < .018,
+        breathRank: hash(id, j, 8065), tint: hash(id, j, 8021), colorRebel: hash(id, j, 8040) < .018,
         colorPhase: hash(id, j, 8041) * Math.PI * 2, mirrorX: width / 2, mirrorY: height / 2, mvx: 0, mvy: 0,
         size: particleSize(hash(id, j, 8012)),
         cohesion: .35 + hash(id, j, 8051), dormantUntil: 0, reactionAfter: 0,
@@ -1453,14 +1452,15 @@
     sky.addColorStop(0, `hsl(${hue},48%,${3 + backgroundEnergy * 5}%)`);
     sky.addColorStop(1, `hsl(${hue + 35},55%,${7 + backgroundEnergy * 12}%)`);
     ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
-    ctx.save();ctx.translate(focus.stageX,focus.stageY);
+
     ctx.globalCompositeOperation = 'lighter';
     drawFocusPoints();
     drawBeatRadiation();
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
       const colour = particleColour(p, f), hue = colour.hue;
-      const radius = p.size * (.8 + p.strength * 1.15 + f.pulse * .65 + f.danceAccent*.16) * (1 - f.collapse * .65);
+      const sizePulse=window.DanceMotion.breathingScale(focus.breath,p.breathRank,f.danceEnergy);
+      const radius = p.size * sizePulse * (.8 + p.strength * 1.15 + f.pulse * .65 + f.danceAccent*.16) * (1 - f.collapse * .65);
       const glow = 12 + radius * 3;
       const colorIndex = colour.sprite;
       const copies = [[p.x, p.y, 1]];
@@ -1479,7 +1479,6 @@
         ctx.beginPath(); ctx.ellipse(x,y,radius*(1+squash),radius*(1-squash),f.heading*.15,0,Math.PI*2); ctx.fill();
       }
     }
-    ctx.restore();
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   }
 

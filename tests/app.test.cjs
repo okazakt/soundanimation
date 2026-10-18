@@ -14,6 +14,8 @@ function fixture(getMicrophone, options = {}) {
   const context = new Proxy({
     createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; },
     putImageData(data) { image = data; },
+    ellipse(...args) { options.ellipses?.push(args); },
+    translate(...args) { options.translations?.push(args); },
     arc(...args) { options.arcs?.push({args,alpha:this.globalAlpha}); },
     quadraticCurveTo(...args) { options.curves?.push(args); }
   }, { get(target, key) { return target[key] || (() => gradient); } });
@@ -51,9 +53,10 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawBeatRadiation = () => drawBeatRadiation();\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawFlocks = () => drawFlocks();\n  window.drawBeatRadiation = () => drawBeatRadiation();\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
+    drawFlocks: () => window.drawFlocks(),
     drawRadiation: () => window.drawBeatRadiation(),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
@@ -178,7 +181,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.27'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.28'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -625,7 +628,7 @@ test('tempo ceilings cover flock leaders, particles, mirror partners and disappe
   }
   assert.ok(rhythm.motionLimitScale < .65);
 });
-test('central focus bobs slowly and occasional surrounding foci fade without multiplying', () => {
+test('central focus stays fixed and occasional surrounding foci fade without multiplying', () => {
   const f = fixture(async stream => stream, { width: 390, height: 740 });
   const { focus, rhythm } = f.inspect(); rhythm.bpm = 90; rhythm.period = 2 / 3;
   const heights = [], counts = new Set();
@@ -637,7 +640,7 @@ test('central focus bobs slowly and occasional surrounding foci fade without mul
     assert.ok(focus.satellites.length <= 2);
     previous = focus.y;
   }
-  assert.ok(Math.max(...heights) - Math.min(...heights) > 25);
+  assert.equal(Math.max(...heights)-Math.min(...heights),0);
   assert.ok(counts.has(0) && counts.has(1));
   for (let i = 0; i < 120; i++) f.stepFocus(.1, false);
   assert.ok(focus.strength < .001 && focus.satellites.length === 0);
@@ -915,4 +918,16 @@ test('central radiation follows compensated beat age, weights the downbeat and s
   arcs.length=0;r.phase=.2;r.beatInBar=2;f.drawRadiation();
   assert.equal(arcs.length,7);assert.ok(arcs[0].alpha<first.alpha*.5);
   arcs.length=0;r.confidence=0;f.drawRadiation();assert.equal(arcs.length,0);
+});
+
+test('breathing changes rendered sphere radius without moving the sphere or translating the scene',()=>{
+  const ellipses=[],translations=[],f=fixture(async s=>s,{ellipses,translations}),state=f.inspect();
+  const g=state.flocks[0],p=g.particles[0];
+  p.alpha=1;p.breathRank=0;p.x=123;p.y=234;g.mirrorAlpha=0;
+  state.focus.breath={wave:-1,participation:2/3};f.drawFlocks();
+  const small=ellipses[0];ellipses.length=0;
+  state.focus.breath.wave=1;f.drawFlocks();const large=ellipses[0];
+  assert.deepEqual(small.slice(0,2),large.slice(0,2));
+  assert.ok(large[2]>small[2]*2);assert.equal(translations.length,0);
+  assert.equal(p.x,123);assert.equal(p.y,234);
 });

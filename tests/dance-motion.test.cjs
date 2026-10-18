@@ -53,36 +53,32 @@ test('all choreography values stay finite and bounded across tempo, meter, mood 
   }
 });
 
-test('centre traverses triangle edges every two beats and diamond edges after stable four meter',()=>{
-  const run=(meter,bpm,seconds)=>{
-    const path=new Dance.CentrePath(),samples=[];
-    for(let i=0;i<seconds*120;i++) {
+test('breathing keeps the tempo-dependent beat intervals and grows membership with stable meter',()=>{
+  const run=(meter,bpm,confidence=1)=>{
+    const clock=new Dance.BreathingPulse();let pulse;
+    for(let i=0;i<2400;i++) {
       const cycle=i/120*bpm/60;
-      const point=path.update({tracking:true,confidence:1,bpm,period:60/bpm,beatCount:Math.floor(cycle),phase:cycle%1,meter,meterConfidence:1},1/120);
-      samples.push(point);
+      pulse=clock.update({tracking:true,confidence:1,bpm,period:60/bpm,beatCount:Math.floor(cycle),phase:cycle%1,meter,meterConfidence:confidence},1/120);
     }
-    return {path,samples};
+    return pulse;
   };
-  const triangle=run(0,120,24);
-  assert.equal(triangle.path.interval,2);assert.ok(Math.abs(triangle.path.step-24)<.02);
-  // Settled vertices are separated by 20% of viewport width.
-  const a=triangle.samples[120*20],b=triangle.samples[120*21];
-  assert.ok(Math.abs(Math.hypot(a.x-b.x,a.y-b.y)-.2)<.002);
-  const diamond=run(4,120,24);
-  assert.equal(diamond.path.interval,2);assert.ok(diamond.path.morph>.999);
-  const c=diamond.samples[120*20],d=diamond.samples[120*21];
-  assert.ok(Math.abs(Math.hypot(c.x-d.x,c.y-d.y)-.2)<.002);
-  assert.equal(run(0,180,15).path.interval,4);
-  assert.equal(run(3,75,15).path.interval,1);
-  assert.equal(run(3,120,15).path.interval,3);
+  const unknown=run(0,120),known=run(4,120);
+  assert.equal(unknown.interval,2);assert.ok(Math.abs(unknown.step-20)<.02);
+  assert.equal(unknown.participation,2/3);assert.ok(known.participation>.899);
+  assert.ok(run(3,120).participation>.899);
+  assert.equal(run(4,120,.7).participation,2/3);
+  assert.equal(run(0,180).interval,4);assert.equal(run(3,75).interval,1);assert.equal(run(3,120).interval,3);
+  const count=pulse=>Array.from({length:1000},(_,i)=>Dance.breathingScale({...pulse,wave:1},i/1000,.8)).filter(s=>s>1.001).length;
+  assert.ok(count(unknown)>650 && count(unknown)<690);assert.ok(count(known)>890 && count(known)<925);
 });
-test('centre remains continuous through meter changes, clock corrections and silence',()=>{
-  const path=new Dance.CentrePath();let last={x:0,y:0};
+test('breathing changes only size and remains continuous through meter, clock corrections and silence',()=>{
+  const clock=new Dance.BreathingPulse();let last=1,pulse;
   for(let i=0;i<3600;i++) {
     const cycle=i/60*2+(i>1800?8:0);
-    const point=path.update({tracking:i<3000,confidence:1,bpm:120,period:.5,beatCount:Math.floor(cycle),phase:cycle%1,meter:i<600?0:i<1800?4:3,meterConfidence:1},1/60);
-    assert.ok(Math.hypot(point.x-last.x,point.y-last.y)<.012,'no teleport when pattern changes');
-    assert.ok(Math.abs(point.x)<.15 && Math.abs(point.y)<.15);last=point;
+    pulse=clock.update({tracking:i<3000,confidence:1,bpm:120,period:.5,beatCount:Math.floor(cycle),phase:cycle%1,meter:i<600?0:i<1800?4:3,meterConfidence:1},1/60);
+    const scale=Dance.breathingScale(pulse,.7,.9);
+    assert.ok(Math.abs(scale-last)<.08);assert.ok(scale>=.56 && scale<=1.44);
+    assert.equal(Dance.breathingScale(pulse,.99,.9),1);last=scale;
   }
-  assert.ok(Math.hypot(last.x,last.y)<.0001);
+  assert.ok(Math.abs(last-1)<.0001);assert.equal(pulse.x,undefined);assert.equal(pulse.y,undefined);
 });

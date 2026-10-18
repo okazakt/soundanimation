@@ -53,9 +53,9 @@
       turn:(Math.sin(cycle*Math.PI/2+id*.61)*.48+beatWave*.1)*confidence+swirl*known*gain*.24,
       hue:(Math.sin(cycle*Math.PI/4+id*.4)*28+Math.cos(phase*Math.PI*2)*18)*confidence+swirl*known*gain*10};
   }
-  // A persistent beat-driven centre. Changing meter never resets its phase.
-  class CentrePath {
-    constructor() { this.step=0;this.last=null;this.interval=2;this.fast=false;this.meter=0;this.candidate=0;this.stable=0;this.morph=0;this.gain=0; }
+  // Persistent pulse timing. Changing meter never resets its phase.
+  class BreathingPulse {
+    constructor() { this.step=0;this.last=null;this.interval=2;this.fast=false;this.meter=0;this.candidate=0;this.stable=0;this.recognition=0;this.gain=0; }
     update(r,dt) {
       const tracking=!!r.tracking && r.confidence>.2 && r.period>0;
       const candidate=r.meterConfidence>.65 && (r.meter===3 || r.meter===4)?r.meter:0;
@@ -73,22 +73,22 @@
         if(r.bpm<threshold-8)this.fast=false;
         this.interval=this.meter===3?(this.fast?3:1):(this.fast?4:2);
       }
-      this.morph+=(Number(this.meter===4)-this.morph)*(1-Math.exp(-dt/1.6));
+      const recognised=tracking && this.meter===candidate && candidate!==0 && r.meterConfidence>=.8 && this.stable>=2;
+      this.recognition+=(Number(recognised)-this.recognition)*(1-Math.exp(-dt/1.6));
       this.gain+=((tracking?1:0)-this.gain)*(1-Math.exp(-dt/(tracking?1.2:.65)));
-      const position=n=>{
-        const index=Math.floor(this.step),phase=this.step-index;
-        const t=clamp(phase/.78,0,1),ease=t*t*t*(10+t*(-15+6*t));
-        const radius=.2/(2*Math.sin(Math.PI/n));
-        const a=(index%n)*Math.PI*2/n-Math.PI/2,b=a+Math.PI*2/n;
-        return {x:(Math.cos(a)+(Math.cos(b)-Math.cos(a))*ease)*radius,
-          y:(Math.sin(a)+(Math.sin(b)-Math.sin(a))*ease)*radius};
-      };
-      const a=position(3),b=position(4);
-      return {x:(a.x+(b.x-a.x)*this.morph)*this.gain,y:(a.y+(b.y-a.y)*this.morph)*this.gain,
-        interval:this.interval,morph:this.morph,step:this.step,meter:this.meter};
+      return {wave:-Math.cos(this.step*Math.PI*2)*this.gain,
+        participation:2/3+(.9-2/3)*this.recognition,
+        interval:this.interval,step:this.step,meter:this.meter,gain:this.gain};
     }
   }
-  const api={energy,styles,sample,CentrePath};
+  function breathingScale(pulse,rank,drive) {
+    // Each particle keeps its own membership rank; new members fade in rather
+    // than switching size when the recognition threshold crosses them.
+    const t=clamp((pulse.participation-rank)/.035+.5,0,1);
+    const weight=t*t*(3-2*t);
+    return 1+pulse.wave*(.32+.12*clamp(drive,0,1))*weight;
+  }
+  const api={energy,styles,sample,BreathingPulse,breathingScale};
   if(typeof module!=='undefined' && module.exports) module.exports=api;
   else root.DanceMotion=api;
 })(typeof self==='undefined'?globalThis:self);
