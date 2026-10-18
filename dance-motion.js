@@ -76,7 +76,12 @@
       const recognised=tracking && this.meter===candidate && candidate!==0 && r.meterConfidence>=.8 && this.stable>=2;
       this.recognition+=(Number(recognised)-this.recognition)*(1-Math.exp(-dt/1.6));
       this.gain+=((tracking?1:0)-this.gain)*(1-Math.exp(-dt/(tracking?1.2:.65)));
-      return {wave:-Math.cos(this.step*Math.PI*2)*this.gain,
+      const phase=this.step%1;
+      const smooth=t=>{t=clamp(t,0,1);return t*t*t*(10+t*(-15+6*t));};
+      // Short attack, distinct return, then a quiet interval. Endpoint velocity
+      // and acceleration are zero, so the sharper accent has no size jumps.
+      const envelope=phase<.16?smooth(phase/.16):1-smooth((phase-.16)/.42);
+      return {wave:(2*envelope-1)*this.gain,
         participation:2/3+(.9-2/3)*this.recognition,
         interval:this.interval,step:this.step,meter:this.meter,gain:this.gain};
     }
@@ -86,7 +91,7 @@
     // than switching size when the recognition threshold crosses them.
     const t=clamp((pulse.participation-rank)/.035+.5,0,1);
     const weight=t*t*(3-2*t);
-    return 1+pulse.wave*(.32+.12*clamp(drive,0,1))*weight;
+    return 1+pulse.wave*(pulse.wave>0 ? .95+.1*clamp(drive,0,1) : .35)*weight;
   }
   const api={energy,styles,sample,BreathingPulse,breathingScale};
   if(typeof module!=='undefined' && module.exports) module.exports=api;

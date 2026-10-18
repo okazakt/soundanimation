@@ -77,8 +77,20 @@ test('breathing changes only size and remains continuous through meter, clock co
     const cycle=i/60*2+(i>1800?8:0);
     pulse=clock.update({tracking:i<3000,confidence:1,bpm:120,period:.5,beatCount:Math.floor(cycle),phase:cycle%1,meter:i<600?0:i<1800?4:3,meterConfidence:1},1/60);
     const scale=Dance.breathingScale(pulse,.7,.9);
-    assert.ok(Math.abs(scale-last)<.08);assert.ok(scale>=.56 && scale<=1.44);
+    assert.ok(Math.abs(scale-last)<.42);assert.ok(scale>=.65 && scale<=2.05);
     assert.equal(Dance.breathingScale(pulse,.99,.9),1);last=scale;
   }
   assert.ok(Math.abs(last-1)<.0001);assert.equal(pulse.x,undefined);assert.equal(pulse.y,undefined);
+});
+
+test('breathing reaches twice normal diameter with a short smooth attack and distinct contraction',()=>{
+  const clock=new Dance.BreathingPulse();clock.gain=1;
+  const r={tracking:true,confidence:1,bpm:120,period:.5,beatCount:0,phase:0,meter:0,meterConfidence:0};
+  const size=phase=>{clock.step=phase;return Dance.breathingScale(clock.update(r,0),0,.5);};
+  assert.equal(size(0),.65);assert.equal(size(.16),2);assert.ok(Math.abs(size(.58)-.65)<1e-10);
+  assert.ok(size(.10)>size(0)+.6);assert.equal(size(.8),.65);
+  for(const boundary of [0,.16,.58,1]) {
+    const left=size((boundary-1e-5+1)%1),right=size((boundary+1e-5)%1);
+    assert.ok(Math.abs(left-right)<1e-6,'no jump at attack, release or cycle boundary');
+  }
 });
