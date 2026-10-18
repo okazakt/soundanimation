@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.14';
+  const VERSION = '2026.10.18.15';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -531,65 +531,181 @@
   const rhythm = { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
     period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1, motionLimitScale: 1, lastReliableBpm: 0, lastReliableTime: -100,
     fluxAverage: 0, quiet: 0, onset: false, beat: false,
+    tempoCandidate: 0, tempoCandidateSince: 0, tempoCandidateCount: 0, tracking: false, lastSupport: -100, phaseCoherence: 0, evidence: 0, pendingTempo: 0, pendingTempoSince: 0, pendingTempoCount: 0,
+    meterCandidate: '', meterCandidateCount: 0, meterLastEvaluated: -Infinity,
+    meterTracking: false, meterScores: [0, 0], meterLastSupport: -100, meterFit: 0, meterMargin: 0,
     meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [],
-    previous: new Float64Array(N), votes: new Float64Array(181), events: [] };
+    previous: new Float64Array(N), pitchClasses: [], pitchMaximum: 0, votes: new Float64Array(181), events: [], featureHistory: [] };
   function resetRhythm() {
     Object.assign(rhythm, { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
       period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1, motionLimitScale: 1, lastReliableBpm: 0, lastReliableTime: -100,
       fluxAverage: 0, quiet: 0, onset: false, beat: false,
+      tempoCandidate: 0, tempoCandidateSince: 0, tempoCandidateCount: 0, tracking: false, lastSupport: -100, phaseCoherence: 0, evidence: 0, pendingTempo: 0, pendingTempoSince: 0, pendingTempoCount: 0,
+      meterCandidate: '', meterCandidateCount: 0, meterLastEvaluated: -Infinity,
+      meterTracking: false, meterScores: [0, 0], meterLastSupport: -100, meterFit: 0, meterMargin: 0,
       meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [] });
-    rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = [];
+    rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = []; rhythm.featureHistory = [];
   }
-  function trackMeter(strength) {
+  // Beat-synchronous multiband novelty + harmonic change; keep weak beats
+  // and offbeat patterns as evidence instead of requiring a detected onset.
+  // Inspired by Krebs et al. (ISMIR 2016), using hand-built observations rather
+  // than their trained networks/DBN. Scores below are heuristics, not probabilities.
+  function trackMeter(features, time = rhythm.time, scale = 1) {
     const r = rhythm;
-    if (r.confidence < .4) return;
-    const offset = (r.time - (r.nextBeat - r.period)) / r.period;
-    const nearest = Math.round(offset);
-    if (Math.abs(offset - nearest) > .23) return;
-    const index = r.beatCount + nearest;
-    const previous = r.accents.find(a => a.index === index);
-    if (previous) previous.strength = Math.max(previous.strength, strength);
-    else r.accents.push({ index, strength });
-    r.accents = r.accents.filter(a => index - a.index < 32);
-    let best = { score: 0, meter: 0, offset: 0 };
-    for (const meter of [3, 4]) {
-      if (r.accents.length < meter * 3) continue;
-      const sums = Array(meter).fill(0), counts = Array(meter).fill(0);
-      for (const a of r.accents) { const k = ((a.index % meter) + meter) % meter; sums[k] += a.strength; counts[k]++; }
-      if (counts.some(n => n < 2)) continue;
-      const means = sums.map((sum, i) => sum / counts[i]);
-      const order = means.map((value, i) => ({ value, i })).sort((a, b) => b.value - a.value);
-      // Require a unique recurring accent. Equal beats or two equal strong
-      // beats cannot establish a downbeat and must remain ambiguous.
-      const contrast = (order[0].value - order[1].value) / Math.max(.001, order[0].value);
-      const confidence = clamp((contrast - .12) / .45, 0, 1);
-      if (confidence > best.score) best = { score: confidence, meter, offset: order[0].i };
+    if (!r.tracking || r.confidence < .25) return;
+    const offset = (time - (r.nextBeat - r.period)) / r.period;
+    const nearest = Math.round(offset), onBeat = Math.abs(offset - nearest) < .27;
+    const index = r.beatCount + (onBeat ? nearest : Math.floor(offset));
+    let observation = r.accents.find(a => a.index === index);
+    if (!observation) {
+      observation = { index, features: Array(8).fill(0), chroma: Array(12).fill(0) }; r.accents.push(observation);
     }
-    if (best.score > .35) {
+    const start = onBeat ? 0 : 4;
+    for (let k = 0; k < 4; k++) observation.features[start + k] += features[k] * scale;
+    for (let k = 0; k < 12; k++) observation.chroma[k] += features[k + 4] * scale;
+    r.accents = r.accents.filter(a => r.beatCount - a.index <= 48 && a.index <= r.beatCount + 1);
+  }
+  function meterObservationWeight(a, newest) {
+    // Missing percussion is weak evidence, not a strong contradictory accent.
+    const reliability = a.features[0] > .001 || a.features[3] > .001 ? 1 : .2;
+    return reliability * Math.exp((a.index - newest) / 14);
+  }
+  function meterModel(samples, meter) {
+    if (samples.length < meter * 3) return { fit: 0, offset: 0, channelFits: Array(8).fill(0), channelWeights: Array(8).fill(0) };
+    const newest = samples[samples.length - 1].index;
+    const counts = Array(meter).fill(0), weights = Array(meter).fill(0);
+    const sums = Array.from({ length: meter }, () => Array(8).fill(0));
+    for (const a of samples) {
+      const pos = ((a.index % meter) + meter) % meter, w = meterObservationWeight(a, newest);
+      counts[pos]++; weights[pos] += w;
+      a.features.forEach((v, k) => { sums[pos][k] += v * w; });
+    }
+    if (counts.some(n => n < 2)) return { fit: 0, offset: 0, channelFits: Array(8).fill(0), channelWeights: Array(8).fill(0) };
+    const means = sums.map((row, pos) => row.map(v => v / weights[pos]));
+    const channelWeights = [1, 1.2, .7, 1, .5, .6, .35, .5];
+    let score = 0, totalWeight = 0;
+    const salience = Array(meter).fill(0), channelFits = Array(8).fill(0), evidenceWeights = Array(8).fill(0);
+    for (let k = 0; k < 8; k++) {
+      let sum = 0, total = 0;
+      for (const a of samples) { const w = meterObservationWeight(a, newest); sum += a.features[k] * w; total += w; }
+      const mean = sum / total;
+      if (mean < .0005) continue;
+      let variance = 0, error = 0;
+      for (const a of samples) {
+        const w = meterObservationWeight(a, newest), pos = ((a.index % meter) + meter) % meter;
+        const v = a.features[k];
+        // Leave-one-out prediction rewards patterns repeating across bars,
+        // while random accents and overfitted short patterns lose evidence.
+        const prediction = (sums[pos][k] - v * w) / Math.max(.001, weights[pos] - w);
+        variance += w * (v - mean) ** 2; error += w * (v - prediction) ** 2;
+      }
+      const contrast = clamp(Math.sqrt(variance / total) / (mean + .002) / .4, 0, 1);
+      const fit = clamp(1 - error / Math.max(1e-8, variance), 0, 1);
+      const weight = channelWeights[k] * contrast;
+      channelFits[k] = fit; evidenceWeights[k] = weight * fit;
+      // A noisy/uninformative channel supplies little evidence; it should
+      // not veto a recurring bass or harmonic pattern in another channel.
+      score += weight * fit * fit; totalWeight += weight * fit;
+      if (k < 4) for (let pos = 0; pos < meter; pos++) {
+        const downbeatWeight = k === 1 || k === 3 ? 1.5 : k === 2 ? .25 : .7;
+        salience[pos] += fit * contrast * downbeatWeight * means[pos][k] / mean;
+      }
+    }
+    return { fit: totalWeight > .1 ? score / totalWeight : 0,
+      offset: salience.indexOf(Math.max(...salience)), channelFits, channelWeights: evidenceWeights };
+  }
+  function evaluateMeter() {
+    const r = rhythm, finished = r.beatCount - 1;
+    if (!r.tracking || finished <= r.meterLastEvaluated) return;
+    r.meterLastEvaluated = finished;
+    const samples = r.accents.filter(a => a.index <= finished).sort((a, b) => a.index - b.index);
+    // Harmonic changes compare beat-averaged chroma, suppressing the frame
+    // noise and percussion transients that dominate adjacent-frame differences.
+    for (let i = 1; i < samples.length; i++) {
+      if (samples[i].index - samples[i - 1].index !== 1) continue;
+      const a = samples[i - 1].chroma, b = samples[i].chroma;
+      let dot = 0, normA = 0, normB = 0;
+      for (let k = 0; k < 12; k++) { dot += a[k] * b[k]; normA += a[k] ** 2; normB += b[k] ** 2; }
+      if (normA > .001 && normB > .001) samples[i].features[3] = clamp(1 - dot / Math.sqrt(normA * normB), 0, 1) * .12;
+    }
+    const models = [3, 4].map(meter => ({ meter, ...meterModel(samples, meter) }));
+    const duple = meterModel(samples, 2);
+    // A repeating two-beat pattern alone cannot distinguish 2 from 4.
+    const four = models[1];
+    let uniqueFour = 0, fourWeight = 0;
+    for (let k = 0; k < 8; k++) {
+      const w = four.channelWeights[k];
+      uniqueFour += w * Math.max(0, four.channelFits[k] - duple.channelFits[k]); fourWeight += w;
+    }
+    four.fit *= clamp(uniqueFour / Math.max(.001, fourWeight) / .2, 0, 1);
+    for (let i = 0; i < 2; i++) r.meterScores[i] = lerp(r.meterScores[i], models[i].fit, .3);
+    const ranked = models.map((model, i) => ({ ...model, score: r.meterScores[i] }))
+      .sort((a, b) => b.score - a.score);
+    const best = ranked[0], margin = best.score - ranked[1].score;
+    r.meterFit = best.score; r.meterMargin = margin;
+    if (best.score > .45 && margin > .12) {
+      const candidate = `${best.meter}:${best.offset}`;
+      if (r.meterCandidate !== candidate) { r.meterCandidate = candidate; r.meterCandidateCount = 0; }
+      r.meterCandidateCount++;
       const same = r.meter === best.meter && r.downbeatOffset === best.offset;
-      r.meterConfidence = same ? lerp(r.meterConfidence, best.score, .3) : best.score * .5;
-      r.meter = best.meter; r.downbeatOffset = best.offset;
-    } else r.meterConfidence *= .85;
+      // A new meter/phase must win repeatedly; a fill cannot flip the bar clock.
+      if (same || r.meterCandidateCount >= (r.meterConfidence > .45 ? best.meter * 2 : 2)) {
+        const confidence = best.score * clamp(margin / .3, 0, 1);
+        r.meterConfidence = same ? lerp(r.meterConfidence, confidence, .2) : confidence * .75;
+        r.meter = best.meter; r.downbeatOffset = best.offset; r.meterLastSupport = r.time;
+        if (!same) r.meterTracking = false;
+        if (r.meterConfidence > .6) r.meterTracking = true;
+      }
+    } else {
+      r.meterCandidateCount = 0;
+      r.meterConfidence *= .97;
+    }
   }
   function updateRhythm(dt) {
     const r = rhythm;
     r.time += dt; r.onset = false; r.beat = false;
-    let flux = 0, level = 0;
+    let flux = 0, level = 0, bassFlux = 0, highFlux = 0;
+    const chroma = new Float64Array(12);
+    const maximum = audio ? Math.min(14000, audio.sampleRate / 2) : 14000;
+    if (r.pitchMaximum !== maximum) {
+      r.pitchMaximum = maximum;
+      r.pitchClasses = Array.from({ length: N }, (_, i) => {
+        const hz = 40 * Math.pow(maximum / 40, (i + .5) / N);
+        return hz >= 130 && hz <= 2200 ? ((Math.round(69 + 12 * Math.log2(hz / 440)) % 12) + 12) % 12 : -1;
+      });
+    }
     for (let i = 0; i < N; i++) {
       const weight = i < 205 ? 1.2 : i < 410 ? 1 : .7;
-      flux += Math.max(0, energies[i] - r.previous[i]) * weight;
-      level += energies[i]; r.previous[i] = energies[i];
+      // Raw input prevents baseline adaptation from being mistaken for silence.
+      const value = Math.max(energies[i], rawEnergies[i]);
+      const novelty = Math.max(0, value - r.previous[i]);
+      flux += novelty * weight;
+      if (i < 170) bassFlux += novelty / 170;
+      if (i >= 340) highFlux += novelty / (N - 340);
+      const pitch = r.pitchClasses[i];
+      if (pitch >= 0) chroma[pitch] += value * value;
+      level += value; r.previous[i] = value;
     }
     flux /= N; level /= N;
+    const norm = Math.sqrt(chroma.reduce((sum, v) => sum + v * v, 0));
+    const features = [flux, bassFlux, highFlux, 0, ...Array.from(chroma, value => norm ? value / norm : 0)];
+    const bucket = Math.floor(r.time * 20);
+    let history = r.featureHistory[r.featureHistory.length - 1];
+    if (!history || history.bucket !== bucket) {
+      history = { bucket, time: (bucket + .5) / 20, features: Array(16).fill(0) };
+      r.featureHistory.push(history);
+    }
+    for (let k = 0; k < 16; k++) history.features[k] += features[k] * dt;
+    r.featureHistory = r.featureHistory.filter(sample => r.time - sample.time < 12);
     r.quiet = level > .003 ? 0 : r.quiet + dt;
     const onset = flux > .006 && flux > r.fluxAverage * 2.2 + .002 && r.time - r.lastOnset > .19;
     r.fluxAverage = lerp(flux, r.fluxAverage, Math.exp(-dt / .65));
-    const voteDecay = Math.exp(-dt / 3.5);
+    const voteDecay = Math.exp(-dt / 5);
     for (let bpm = 60; bpm <= 180; bpm++) r.votes[bpm] *= voteDecay;
-    r.events = r.events.filter(event => r.time - event.time < 7);
+    r.events = r.events.filter(event => r.time - event.time < 12);
     if (onset) {
       r.onset = true; r.lastOnset = r.time;
-      for (let j = r.events.length - 1; j >= Math.max(0, r.events.length - 8); j--) {
+      for (let j = r.events.length - 1; j >= Math.max(0, r.events.length - 16); j--) {
         const delta = r.time - r.events[j].time;
         // Consecutive intervals get the most weight; longer spans bridge a
         // missing kick. Multiple hypotheses cover half/double-tempo ambiguity.
@@ -603,44 +719,106 @@
           }
         }
       }
-      r.events.push({ time: r.time });
+      r.events.push({ time: r.time, features, strength: flux });
+      let phaseSupport = 0;
+      if (r.tracking) {
+        let supporting = 0, total = 0;
+        for (const event of r.events.slice(-16)) {
+          const w = Math.sqrt(event.strength) * Math.exp((event.time - r.time) / 4);
+          const cycles = (event.time - r.nextBeat) / r.period;
+          supporting += w * (Math.abs(cycles - Math.round(cycles)) < .2 ? 1 : 0); total += w;
+        }
+        phaseSupport = supporting / Math.max(.001, total);
+        r.phaseCoherence = phaseSupport;
+        if (phaseSupport > .55) r.lastSupport = r.time;
+      }
       let winner = 0, best = 0, runner = 0;
       for (let bpm = 60; bpm <= 180; bpm++) {
-        const prior = r.confidence > .45 && Math.abs(bpm - r.bpm) < 5 ? 1.12 : 1;
+        const distance = r.bpm ? Math.log(bpm / r.bpm) : 10;
+        const prior = r.tracking ? 1 + .45 * Math.exp(-.5 * (distance / .075) ** 2) : 1;
         const score = r.votes[bpm] * prior;
         if (score > best) { best = score; winner = bpm; }
       }
-      for (let bpm = 60; bpm <= 180; bpm++) if (Math.abs(bpm - winner) > Math.max(7, winner * .08)) runner = Math.max(runner, r.votes[bpm]);
+      for (let bpm = 60; bpm <= 180; bpm++) if (Math.abs(bpm - winner) > Math.max(7, winner * .08)) {
+        const distance = r.bpm ? Math.log(bpm / r.bpm) : 10;
+        const prior = r.tracking ? 1 + .45 * Math.exp(-.5 * (distance / .075) ** 2) : 1;
+        runner = Math.max(runner, r.votes[bpm] * prior);
+      }
       if (winner && r.events.length >= 4) {
         const period = 60 / winner;
-        const recent = r.events.slice(-10);
-        let coherent = 0;
+        const recent = r.events.slice(-16);
+        let coherent = 0, totalWeight = 0;
         for (const event of recent) {
           const cycles = (r.time - event.time) / period;
-          if (Math.abs(cycles - Math.round(cycles)) < .20) coherent++;
+          const weight = Math.sqrt(event.strength) * Math.exp((event.time - r.time) / 6);
+          const distance = Math.abs(cycles - Math.round(cycles));
+          coherent += weight * (distance < .20 ? 1 : Math.abs(distance - .5) < .14 ? .7 : 0);
+          totalWeight += weight;
         }
-        const certainty = clamp((best - runner) / Math.max(.01, best) * 2, 0, 1) *
-          clamp((coherent / recent.length - .55) / .4, 0, 1) * clamp((recent.length - 2) / 4, 0, 1);
-        const wasLocked = r.confidence > .3;
-        r.confidence = lerp(r.confidence, certainty, .4);
-        if (certainty > .3) {
+        let certainty = clamp((best - runner) / Math.max(.01, best) * 2, 0, 1) *
+          clamp((coherent / Math.max(.001, totalWeight) - .55) / .4, 0, 1) * clamp((recent.length - 2) / 4, 0, 1);
+        {
+          if (!r.tempoCandidate || Math.abs(Math.log(winner / r.tempoCandidate)) > .04) {
+            r.tempoCandidate = winner; r.tempoCandidateSince = r.time; r.tempoCandidateCount = 0;
+          }
+          r.tempoCandidateCount++;
+          // Repeated moderate evidence for the same tempo can establish a
+          // clock even when subdivisions keep any single observation unsure.
+          const persistence = clamp((r.time - r.tempoCandidateSince - 2) / 4, 0, 1) * clamp((r.tempoCandidateCount - 6) / 8, 0, 1);
+          const regularity = clamp((coherent / Math.max(.001, totalWeight) - .62) / .18, 0, 1);
+          const separation = clamp(((best - runner) / Math.max(.01, best) - .06) / .16, 0, 1);
+          certainty = Math.max(certainty, .7 * persistence * regularity * separation);
+        }
+        const wasLocked = r.tracking;
+        r.evidence = certainty;
+        const supportedCertainty = wasLocked ? Math.max(certainty, clamp((phaseSupport - .4) / .5, 0, 1) * .85) : certainty;
+        r.confidence = lerp(r.confidence, supportedCertainty, wasLocked ? .08 : .4);
+        if (!r.tracking && r.confidence > .5) { r.tracking = true; r.lastSupport = r.time; }
+        const change = r.bpm ? Math.abs(Math.log(winner / r.bpm)) : 0;
+        if (wasLocked && change < .05 && certainty > .45) r.lastSupport = r.time;
+        if (wasLocked && change > .12 && certainty > .35) {
+          if (Math.abs(r.pendingTempo - winner) > winner * .06) {
+            r.pendingTempo = winner; r.pendingTempoSince = r.time; r.pendingTempoCount = 0;
+          }
+          r.pendingTempoCount++;
+        } else if (change <= .12) { r.pendingTempo = 0; r.pendingTempoCount = 0; }
+        const allowChange = !wasLocked || change <= .12 ||
+          (r.pendingTempoCount >= 4 && r.time - r.pendingTempoSince >= 2);
+        if (certainty > .3 && allowChange) {
           // Median recent intervals ignore early/late individual hits and
           // bridge missing beats, while following a gradual human tempo drift.
           const intervals = [];
-          for (let i = 1; i < recent.length; i++) {
-            const gap = recent[i].time - recent[i - 1].time;
+          const aligned = recent.filter(event => {
+            const cycles = (event.time - r.nextBeat) / r.period;
+            return Math.abs(cycles - Math.round(cycles)) < .2;
+          });
+          const timingEvents = wasLocked && change <= .12 && aligned.length >= 4 ? aligned : recent;
+          const addInterval = gap => {
             const beats = Math.max(1, Math.round(gap / period));
             const sample = gap / beats;
             if (Math.abs(sample - period) < period * .23) intervals.push(sample);
-          }
+          };
+          if (timingEvents === aligned) {
+            // Spans of several beats average out FFT/render-frame timing
+            // jitter; a single short interval must not bend a stable clock.
+            for (let i = 1; i < aligned.length; i++) for (let j = 0; j < i; j++) {
+              const gap = aligned[i].time - aligned[j].time;
+              if (gap >= period * 1.5 && gap <= period * 8.5) addInterval(gap);
+            }
+          } else for (let i = 1; i < timingEvents.length; i++) addInterval(timingEvents[i].time - timingEvents[i - 1].time);
           intervals.sort((a, b) => a - b);
           const middle = Math.floor(intervals.length / 2);
           const median = intervals.length ? (intervals[middle] + intervals[Math.max(0, Math.ceil(intervals.length / 2) - 1)]) / 2 : period;
-          const candidate = lerp(winner, 60 / median, .45);
+          const candidate = lerp(winner, 60 / median, wasLocked && timingEvents === aligned ? .9 : .45);
+          const hadTempo = r.bpm > 0;
           r.bpm = wasLocked ? lerp(r.bpm, candidate, .2) : candidate;
           r.period = 60 / r.bpm;
-          if (!wasLocked) r.nextBeat = r.time + r.period;
-          else {
+          if (!hadTempo) {
+            // Choose a strong recent onset as phase anchor; subdivisions must
+            // not restart the provisional clock on every observation.
+            const anchor = recent.reduce((best, event) => event.strength > best.strength ? event : best).time;
+            r.nextBeat = anchor + (Math.floor((r.time - anchor) / r.period) + 1) * r.period;
+          } else {
             const nearest = r.nextBeat + Math.round((r.time - r.nextBeat) / r.period) * r.period;
             const error = r.time - nearest;
             if (Math.abs(error) < r.period * .27) r.nextBeat += clamp(error, -.085, .085) * .2;
@@ -648,20 +826,38 @@
         }
       }
     }
-    if (onset) trackMeter(flux);
-    const stale = r.time - r.lastOnset > Math.max(1.8, r.period * 3.5);
-    if (stale || r.quiet > .15) r.confidence *= Math.exp(-dt / (r.quiet > .15 ? .45 : 1.2));
-    if (r.confidence > .3 && r.quiet < .15) {
+    const stale = r.time - r.lastSupport > 8;
+    const silent = r.quiet > (r.tracking ? Math.max(.6, r.period * 1.4) : .6);
+    // Acquisition and release have different thresholds. A poor single
+    // observation cannot erase a few bars of supporting history.
+    if (silent) r.confidence *= Math.exp(-dt / .45);
+    else if (r.tracking && !stale) r.confidence = Math.max(.38, r.confidence);
+    else if (r.time - r.lastOnset > 2 || (r.tracking && stale)) r.confidence *= Math.exp(-dt / 2);
+    if (r.tracking && r.confidence < .22) {
+      r.tracking = false; r.accents = []; r.meterCandidateCount = 0;
+      r.meterScores = [0, 0]; r.meter = 0; r.meterConfidence = 0; r.meterTracking = false;
+    }
+    if (r.tracking && r.confidence > .25 && !silent) {
       while (r.nextBeat <= r.time) {
         if (r.time - r.lastBeat > r.period * .6) { r.beat = true; r.lastBeat = r.nextBeat; r.beatCount++; }
         r.nextBeat += r.period;
       }
       r.phase = ((r.time - (r.nextBeat - r.period)) / r.period + 1) % 1;
       r.pulse = Math.exp(-r.phase * 9);
+      // Average novelty over sub-beat windows rather than trusting one noisy
+      // FFT peak. The bounded 20 Hz history also includes previously weak beats.
+      if (!r.accents.length) {
+        for (const sample of r.featureHistory) trackMeter(sample.features, sample.time, 4 / r.period);
+      } else trackMeter(features, r.time, 4 * dt / r.period);
+      evaluateMeter();
     } else { r.pulse *= Math.exp(-dt / .18); }
-    if (stale && r.confidence < .03) { r.bpm = 0; r.events = []; r.votes.fill(0); }
-    if (r.quiet > .15 || stale) r.meterConfidence *= Math.exp(-dt / .7);
-    if (r.meterConfidence < .15) { r.beatInBar = 0; }
+    if (!r.tracking && r.confidence < .03 && r.time - r.lastOnset > 3) {
+      r.bpm = 0; r.events = []; r.votes.fill(0);
+    }
+    if (r.meterTracking && !silent && r.time - r.meterLastSupport < 12) r.meterConfidence = Math.max(.55, r.meterConfidence);
+    if (silent) r.meterConfidence *= Math.exp(-dt / .5);
+    else if (r.time - r.meterLastSupport > 8) r.meterConfidence *= Math.exp(-dt / 10);
+    if (r.meterConfidence < .15 || !r.tracking) { r.beatInBar = 0; }
     else r.beatInBar = ((r.beatCount - r.downbeatOffset) % r.meter + r.meter) % r.meter + 1;
     const tempoSpeed = r.bpm ? clamp(Math.pow(r.bpm / 120, 1.2), .5, 1.65) : 1;
     r.motionScale = lerp(lerp(1, tempoSpeed, r.confidence), r.motionScale, Math.exp(-dt / 1.2));
@@ -771,14 +967,16 @@
     m.confidence = lerp(clamp(mean * 12, .2, 1), m.confidence, Math.exp(-dt / 4));
   }
   const debugPanel = document.querySelector('#audio-debug');
-  const debugFields = Object.fromEntries(['input', 'tempo', 'beat', 'onset', 'meter', 'position', 'window', 'mood', 'timbre']
+  const debugFields = Object.fromEntries(['input', 'tempo', 'tracking', 'beat', 'onset', 'meter', 'meter-evidence', 'position', 'window', 'mood', 'timbre']
     .map(key => [key, document.querySelector(`#debug-${key}`)]));
   let debugLastTime = -Infinity;
   function updateDebug(force = false) {
     if (!debugPanel.open && !force) return;
     const r = rhythm, m = mood;
-    const audible = running && rawEnergies.some(value => value > .015);
-    const locked = audible && r.confidence > .3 && r.bpm > 0;
+    // Brief inter-beat silence must not hide a clock that is still tracking.
+    const bridging = running && r.tracking && r.quiet <= Math.max(.6, r.period * 1.4);
+    const audible = running && (rawEnergies.some(value => value > .015) || bridging);
+    const locked = audible && r.tracking && r.confidence > .3 && r.bpm > 0;
     const meterKnown = locked && r.meterConfidence > .5 && r.beatInBar > 0;
     // Lamps follow the actual beat clock every frame, independently of text refresh.
     debugFields.beat.setAttribute('style', `opacity:${locked ? .15 + .85 * r.pulse : .15}`);
@@ -790,9 +988,11 @@
     const set = (key, text) => { if (debugFields[key].textContent !== text) debugFields[key].textContent = text; };
     set('input', !running ? '停止中' : `${demo ? 'デモ入力' : 'マイク入力'} · ${audible ? '解析中' : '無音／入力待ち'}`);
     set('tempo', locked ? `${r.bpm.toFixed(1)} BPM / ${(r.bpm / 60).toFixed(2)} BPS · 確かさ ${pct(r.confidence)}` : `— BPM / — BPS · ${audible ? '推定中' : '判定待ち'}`);
+    set('tracking', locked ? `${r.evidence > .35 && r.time - r.lastSupport < Math.max(.75, r.period * 1.5) ? '追従中' : '履歴で継続'} · 最終支持 ${Math.max(0, r.time - r.lastSupport).toFixed(1)}秒前` : '推定待ち');
+    set('meter-evidence', audible ? `3拍 ${pct(r.meterScores[0])} / 4拍 ${pct(r.meterScores[1])} · 候補差 ${pct(r.meterMargin)}` : '—');
     set('meter', meterKnown ? `${r.meter}拍子系 · 確かさ ${pct(r.meterConfidence)}` : `未確定 · 確かさ ${pct(audible ? r.meterConfidence : 0)}`);
     set('position', meterKnown ? Array.from({ length: r.meter }, (_, i) => `${i + 1 === r.beatInBar ? '●' : '○'}${i + 1}`).join('  ') : '—');
-    set('window', `直近32拍${locked ? ` ≈ ${(32 * r.period).toFixed(1)}秒` : ''} · 記録 ${r.accents.length}件 · 最低3周期`);
+    set('window', `直近48拍${locked ? ` ≈ ${(48 * r.period).toFixed(1)}秒` : ''} · 記録 ${r.accents.filter(a => a.index < r.beatCount).length}拍 · 最低3周期`);
     const expression = `${m.warmth > .15 ? '明るめ' : m.warmth < -.15 ? '陰影あり' : '中間'}・${m.activity > .55 ? '活発' : m.activity < .3 ? '穏やか' : '中程度の動き'}`;
     set('mood', audible ? `${expression} · 活動 ${pct(m.activity)} / 緊張 ${pct(m.tension)} / 確かさ ${pct(m.confidence)}` : '—');
     set('timbre', audible ? `${m.brightness < .35 ? '低域寄り' : m.brightness > .65 ? '高域寄り' : '中域寄り'}・${m.flatness > .45 ? 'ノイズ的' : '倍音的'}（明るさ ${pct(m.brightness)} / 平坦度 ${pct(m.flatness)}）` : '—');

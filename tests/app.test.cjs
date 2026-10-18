@@ -38,7 +38,14 @@ function fixture(getMicrophone, options = {}) {
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
   const window = { AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
-  const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
+  // Reproducible visual variation keeps coverage independent of session RNG.
+  let randomState = options.randomSeed ?? 0x12345678;
+  const deterministicMath = Object.create(Math);
+  deterministicMath.random = () => {
+    randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
+    return randomState / 0x100000000;
+  };
+  const sandbox = { Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
   vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
@@ -167,7 +174,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.14'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.15'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -793,24 +800,205 @@ test('debug overlay shows the current beat clock, uncertain meter, mood and acou
   const f = fixture(async stream => stream, { width: 8, height: 8 });
   await f.nodes['#start'].click(); await flush(); await f.tick();
   const { rhythm, mood } = f.inspect();
-  Object.assign(rhythm, { bpm: 120, period: .5, confidence: .8, meter: 3,
+  Object.assign(rhythm, { bpm: 120, period: .5, confidence: .8, tracking: true, lastSupport: rhythm.time, meter: 3,
     meterConfidence: .85, beatInBar: 2, pulse: 1, lastOnset: rhythm.time });
   Object.assign(mood, { brightness: .2, flatness: .1, activity: .7, warmth: .3, confidence: .8 });
   f.nodes['#audio-debug'].open = true; f.nodes['#audio-debug'].toggle();
   assert.match(f.nodes['#debug-tempo'].textContent, /120.0 BPM \/ 2.00 BPS/);
   assert.match(f.nodes['#debug-meter'].textContent, /3拍子系/);
   assert.match(f.nodes['#debug-position'].textContent, /●2/);
-  assert.match(f.nodes['#debug-window'].textContent, /16.0秒/);
+  assert.match(f.nodes['#debug-window'].textContent, /24.0秒/);
   assert.match(f.nodes['#debug-mood'].textContent, /活発/);
   assert.match(f.nodes['#debug-timbre'].textContent, /低域寄り・倍音的/);
   assert.equal(f.nodes['#debug-beat'].attributes.style, 'opacity:1');
   assert.equal(f.nodes['#debug-onset'].attributes.style, 'opacity:1');
+  rhythm.evidence = .8; f.nodes['#audio-debug'].toggle();
+  assert.match(f.nodes['#debug-tracking'].textContent, /追従中/);
+  rhythm.lastSupport = rhythm.time - 3; f.nodes['#audio-debug'].toggle();
+  assert.match(f.nodes['#debug-tracking'].textContent, /履歴で継続/);
   rhythm.meterConfidence = .2; f.nodes['#audio-debug'].toggle();
   assert.match(f.nodes['#debug-meter'].textContent, /未確定/);
   assert.equal(f.nodes['#debug-position'].textContent, '—');
+  f.stepMood(new Float64Array(512), .1); rhythm.quiet = .3;
+  f.nodes['#audio-debug'].toggle();
+  assert.match(f.nodes['#debug-tempo'].textContent, /120.0 BPM/, 'inter-beat silence must not blank the retained tempo');
+  rhythm.quiet = 2; f.nodes['#audio-debug'].toggle();
+  assert.match(f.nodes['#debug-tempo'].textContent, /— BPM/, 'a real stop hides stale estimates');
   f.nodes['#stop'].click();
   assert.equal(f.nodes['#debug-input'].textContent, '停止中');
   assert.match(f.nodes['#debug-tempo'].textContent, /— BPM/);
   assert.equal(f.nodes['#debug-timbre'].textContent, '—');
   assert.equal(f.nodes['#debug-beat'].attributes.style, 'opacity:0.15');
+});
+
+// Synthetic spectra isolate timing, dynamics and spectral patterns. These are
+// regression fixtures, not an accuracy benchmark on recorded music.
+function patternedRhythm({ meter = 4, seconds = 28, changeAt = Infinity, nextMeter = 3,
+  syncopated = false, missing = false, spectral = false, fillAt = Infinity } = {}) {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const values = new Float64Array(512), states = [];
+  for (let frame = 0; frame < seconds * 60; frame++) {
+    const time = frame / 60, beat = Math.floor(time * 2), localMeter = time < changeAt ? meter : nextMeter;
+    const position = beat % localMeter, phase = time % .5;
+    values.fill(.008);
+    const dropout = missing && beat % 11 === 7;
+    if (phase < .05 && !dropout) {
+      if (spectral) {
+        const start = position === 0 ? 0 : position === 2 ? 175 : 340;
+        values.fill(.55, start, start + 160);
+      } else values.fill(position === 0 ? .65 : .26, 0, 205);
+    }
+    if (syncopated && phase >= .25 && phase < .30) values.fill(.18, 340, 512);
+    if (time >= fillAt && time < fillAt + 1) {
+      values.fill(.008); if (frame % 13 < 3) values.fill(.45, 175, 512);
+    }
+    f.stepRhythm(values, 1 / 60);
+    const r = f.inspect().rhythm;
+    if (frame % 30 === 5) states.push({ time, bpm: r.bpm, tracking: r.tracking,
+      confidence: r.confidence, meter: r.meter, meterConfidence: r.meterConfidence, beatInBar: r.beatInBar,
+      scores: [...r.meterScores], phase: r.phase });
+  }
+  return { f, states };
+}
+
+test('learned tempo carries six seconds of missing beats, expires without support, and silence clears faster', () => {
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 60 * 10; i++) step(1 / 60, i % 30 < 3);
+  const bpm = f.inspect().rhythm.bpm;
+  let beats = 0;
+  for (let i = 0; i < 60 * 6; i++) {
+    const r = step(1 / 60); if (r.beat) beats++;
+    assert.ok(r.tracking && r.confidence > .3, 'audible pauses preserve the acquired clock');
+    assert.ok(Math.abs(r.bpm - bpm) < 2);
+  }
+  assert.ok(beats >= 11 && beats <= 13, `${beats} continued beats`);
+  for (let i = 0; i < 60 * 14; i++) step(1 / 60);
+  assert.equal(f.inspect().rhythm.tracking, false, 'old tempo cannot run forever without support');
+  assert.equal(f.inspect().rhythm.bpm, 0);
+});
+
+test('raw sustained input is not mistaken for silence after baseline subtraction', () => {
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 60 * 8; i++) step(1 / 60, i % 30 < 3);
+  const corrected = new Float64Array(512), raw = new Float64Array(512); raw.fill(.06);
+  for (let i = 0; i < 60; i++) f.stepScene(corrected, raw, .1);
+  assert.ok(f.inspect().rhythm.tracking && f.inspect().rhythm.quiet === 0);
+  raw.fill(0);
+  for (let i = 0; i < 30; i++) f.stepScene(corrected, raw, .1);
+  assert.ok(!f.inspect().rhythm.tracking && f.inspect().rhythm.pulse < .001);
+});
+
+test('spectral patterns reveal 3 and 4 even when every beat has equal overall energy', () => {
+  for (const meter of [3, 4]) {
+    const { f, states } = patternedRhythm({ meter, spectral: true });
+    const r = f.inspect().rhythm;
+    assert.ok(Math.abs(r.bpm - 120) < 3, `${meter}: BPM ${r.bpm}`);
+    assert.equal(r.meter, meter, `scores ${r.meterScores}`);
+    assert.equal(r.accents.filter(a => a.index < r.beatCount).length, 48, 'the retained window contains 48 completed beats');
+    assert.ok(r.meterConfidence > .5, `${meter}: confidence ${r.meterConfidence}`);
+    const established = states.filter(s => s.time > 16 && Math.floor(s.time * 2) % meter === 0);
+    assert.ok(established.every(s => s.beatInBar === 1), 'bass pattern identifies the downbeat');
+  }
+});
+
+test('syncopation, missed beats and a short fill do not repeatedly release tempo or flip meter', () => {
+  for (const meter of [3, 4]) {
+    const { f, states } = patternedRhythm({ meter, syncopated: true, missing: true, fillAt: 18, seconds: 32 });
+    const established = states.filter(s => s.time > 14);
+    assert.ok(established.every(s => s.tracking), `clock released for ${meter}`);
+    assert.ok(established.every(s => Math.abs(s.bpm - 120) < 5), `tempo wandered for ${meter}`);
+    assert.equal(f.inspect().rhythm.meter, meter);
+    assert.ok(f.inspect().rhythm.meterConfidence > .5);
+    assert.ok(established.filter(s => s.meter === meter && s.meterConfidence > .5).length / established.length > .85);
+  }
+});
+
+test('a repeated two-beat alternation does not force a four-beat interpretation', () => {
+  const { f } = patternedRhythm({ meter: 2, seconds: 25 });
+  assert.ok(f.inspect().rhythm.meterConfidence < .4);
+});
+
+test('sustained new bar patterns can replace an established meter', () => {
+  for (const [meter, nextMeter] of [[3, 4], [4, 3]]) {
+    const { f } = patternedRhythm({ meter, nextMeter, changeAt: 24, seconds: 50 });
+    const r = f.inspect().rhythm;
+    assert.equal(r.meter, nextMeter, `${meter} to ${nextMeter}, scores ${r.meterScores}`);
+    assert.ok(r.meterConfidence > .5);
+  }
+});
+
+test('historical tempo yields to a sustained new tempo instead of staying locked to the old speed', () => {
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 60 * 12; i++) step(1 / 60, i % 30 < 3);
+  for (let i = 0; i < 60 * 16; i++) step(1 / 60, i % 24 < 3);
+  const r = f.inspect().rhythm;
+  assert.ok(r.tracking && Math.abs(r.bpm - 150) < 4, `new BPM ${r.bpm}`);
+});
+
+test('unstructured onsets eventually release an old clock rather than renewing its history forever', () => {
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 60 * 10; i++) step(1 / 60, i % 30 < 3);
+  let next = .1, count = 0;
+  const intervals = [.31, .79, .22, .57, .91, .39, .71, .24, .83, .48, .27];
+  for (let i = 0; i < 60 * 28; i++) {
+    const t = i / 60;
+    if (t >= next + .05) { next += intervals[count++ % intervals.length]; }
+    step(1 / 60, t >= next && t < next + .04);
+  }
+  const r = f.inspect().rhythm;
+  assert.ok(!r.tracking || r.confidence < .3, `old clock confidence ${r.confidence}, support ${r.phaseCoherence}`);
+});
+
+test('repeated harmonic changes contribute bar evidence over otherwise equal percussion', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const values = new Float64Array(512);
+  for (let frame = 0; frame < 60 * 30; frame++) {
+    const t = frame / 60, chord = Math.floor(t / 2) % 2 ? [62, 65, 69] : [60, 64, 67];
+    values.fill(.008);
+    for (const note of chord) {
+      const hz = 440 * Math.pow(2, (note - 69) / 12);
+      const centre = Math.log(hz / 40) / Math.log(14000 / 40) * 512 - .5;
+      for (let i = Math.max(0, Math.floor(centre - 5)); i < Math.min(512, centre + 5); i++) {
+        values[i] += .3 * Math.exp(-Math.pow((i - centre) / 1.4, 2));
+      }
+    }
+    if (t % .5 < .05) for (let i = 0; i < 80; i++) values[i] += .4;
+    f.stepRhythm(values, 1 / 60);
+  }
+  const r = f.inspect().rhythm;
+  assert.ok(r.accents.some(a => a.features[3] > .01), 'harmonic novelty reaches the beat observations');
+  assert.equal(r.meter, 4);
+  assert.ok(r.meterConfidence > .5);
+});
+
+test('persistent moderate tempo evidence accumulates despite equally prominent subdivisions', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const values = new Float64Array(512);
+  for (let i = 0; i < 60 * 28; i++) {
+    values.fill(.008);
+    if (i % 30 < 3) values.fill(.3, 0, 205);
+    if (i % 30 >= 15 && i % 30 < 18) values.fill(.5, 340, 512);
+    f.stepRhythm(values, 1 / 60);
+    const r = f.inspect().rhythm;
+    if (i > 60 * 14) assert.ok(r.tracking && r.confidence > .3, 'a persistent candidate must remain established');
+  }
+  assert.ok(Math.abs(f.inspect().rhythm.bpm - 120) < 3);
+});
+
+
+test('slow isolated percussion retains the clock across genuinely silent spaces between beats', () => {
+  for (const bpm of [60, 72, 90]) {
+    const f = fixture(async stream => stream, { width: 8, height: 8 });
+    const values = new Float64Array(512);
+    for (let i = 0; i < 60 * 18; i++) {
+      values.fill(0);
+      if ((i / 60) % (60 / bpm) < .06) values.fill(.6, 0, 205);
+      f.stepRhythm(values, 1 / 60);
+      if (i > 60 * 10) assert.ok(f.inspect().rhythm.tracking, `${bpm}: between-beat silence must not release the clock`);
+    }
+    assert.ok(Math.abs(f.inspect().rhythm.bpm - bpm) < 3);
+    values.fill(0);
+    for (let i = 0; i < 60 * 4; i++) f.stepRhythm(values, 1 / 60);
+    assert.ok(!f.inspect().rhythm.tracking, 'a real stop still releases the clock');
+  }
 });

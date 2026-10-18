@@ -8,9 +8,9 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.14">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.15">
   <title>Starlight Bell</title>
-  <script src="./app.js?v=2026.10.18.14" defer></script>
+  <script src="./app.js?v=2026.10.18.15" defer></script>
 </head>
 <body>
   <main id="sky" aria-label="音に反応する光のアニメーション">
@@ -24,10 +24,12 @@
         <p id="debug-input">停止中</p>
         <dl>
           <dt>テンポ</dt><dd id="debug-tempo">— BPM / — BPS</dd>
+          <dt>推定の状態</dt><dd id="debug-tracking">推定待ち</dd>
           <dt>リズム点灯</dt><dd><span id="debug-beat" class="debug-lamp">●</span> 推定拍 <span id="debug-onset" class="debug-lamp">●</span> 音の立ち上がり</dd>
           <dt>拍子</dt><dd id="debug-meter">判定待ち</dd>
+          <dt>拍子の材料</dt><dd id="debug-meter-evidence">—</dd>
           <dt>小節内の拍</dt><dd id="debug-position">—</dd>
-          <dt>参照範囲</dt><dd id="debug-window">直近32拍・最低3周期</dd>
+          <dt>参照範囲</dt><dd id="debug-window">直近48拍・最低3周期</dd>
           <dt>音楽の表情</dt><dd id="debug-mood">—</dd>
           <dt>音色の特徴</dt><dd id="debug-timbre">—</dd>
         </dl>
