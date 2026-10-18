@@ -16,14 +16,16 @@ button { flex: 1; max-width: 240px; min-height: 48px; border: 1px solid #a9bed64
 button:disabled { opacity: .3; cursor: default; }
 button:focus-visible { outline: 2px solid #c4dcff; outline-offset: 3px; }
 button:not(:disabled):active { background: #c4dcff30; }
-#microphone-controls { flex: none; padding: 8px 16px 0; text-align: center; font-size: 12px; color: #c4c9d8; }
-#microphone-controls label { display: inline-flex; align-items: center; min-height: 36px; gap: 6px; }
-#builtin-microphone { width: 18px; height: 18px; accent-color: #c4dcff; }
-#microphone-status { margin: 0 0 6px; font-size: 11px; overflow-wrap: anywhere; }
-.microphone-picker { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
-#microphone-select { flex: 1; min-width: 0; max-width: 300px; min-height: 40px; background: #101a30; color: #edf2ff; border: 1px solid #a9bed64d; border-radius: 8px; font: inherit; }
-#refresh-microphones { flex: none; min-height: 40px; padding: 0 10px; font-size: 12px; letter-spacing: 0; }
-#microphone-list-status { margin: 6px 0 0; font-size: 11px; }
+#microphone-controls { flex: none; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px; color: #c4c9d8; }
+#choose-microphone { flex: none; min-height: 40px; padding: 0 12px; font-size: 12px; letter-spacing: .04em; }
+#microphone-name { margin: 0; max-width: 55%; overflow-wrap: anywhere; font-size: 12px; }
+#microphone-dialog { width: min(440px, calc(100% - 32px)); max-height: 75dvh; overflow: auto; padding: 24px; border: 1px solid #a9bed64d; border-radius: 20px; background: #101426; color: #edf2ff; }
+#microphone-dialog::backdrop { background: #02040bbd; }
+#microphone-dialog h2 { margin: 0 0 16px; font-size: 18px; font-weight: 400; }
+#microphone-prompt { font-size: 13px; line-height: 1.8; color: #c4c9d8; }
+#microphone-choices { display: grid; gap: 10px; margin: 16px 0; }
+#microphone-dialog button { width: 100%; max-width: none; padding: 10px 14px; overflow-wrap: anywhere; letter-spacing: .04em; }
+#microphone-choices button[aria-pressed="true"] { border-color: #c4dcff; background: #c4dcff26; }
 @media (prefers-reduced-motion: reduce) { #intro, #notice { transition: none; } }
 
 #version { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); margin: 0; color: #c4c9d8; font-size: 11px; letter-spacing: .04em; pointer-events: none; text-shadow: 0 1px 4px #000; }

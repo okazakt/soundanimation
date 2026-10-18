@@ -8,9 +8,9 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.11">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.12">
   <title>Starlight Bell</title>
-  <script src="./app.js?v=2026.10.18.11" defer></script>
+  <script src="./app.js?v=2026.10.18.12" defer></script>
 </head>
 <body>
   <main id="sky" aria-label="音に反応する光のアニメーション">
@@ -22,11 +22,15 @@
     <p id="notice" role="status" aria-live="polite"></p>
   </main>
   <div id="microphone-controls">
-    <div class="microphone-picker"><label for="microphone-select">入力マイク</label><select id="microphone-select"><option value="">自動／本体マイク設定を使用</option></select><button id="refresh-microphones" type="button">一覧を更新</button></div>
-    <p id="microphone-list-status" role="status" aria-live="polite">一覧の取得にはマイクの許可が必要です</p>
-    <label><input id="builtin-microphone" type="checkbox" checked> 本体マイクを指定する</label>
-    <p id="microphone-status" role="status" aria-live="polite">マイク停止中</p>
+    <button id="choose-microphone" type="button" aria-haspopup="dialog">使用マイク指定</button>
+    <p id="microphone-name" role="status" aria-live="polite">未指定（自動選択）</p>
   </div>
+  <dialog id="microphone-dialog" aria-labelledby="microphone-dialog-title" aria-describedby="microphone-prompt">
+    <h2 id="microphone-dialog-title">使用マイク指定</h2>
+    <p id="microphone-prompt" role="status" aria-live="polite"></p>
+    <div id="microphone-choices"></div>
+    <button id="close-microphone-dialog" type="button">閉じる</button>
+  </dialog>
   <footer aria-label="観測の操作">
     <button id="previous-mode" class="mode-arrow" type="button" aria-label="前のアニメーション：星空"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
     <button id="start" type="button">開始</button>
