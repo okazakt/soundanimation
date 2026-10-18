@@ -1,9 +1,16 @@
 'use strict';
 // All cache operations and requests stay within this application's directory.
 const PREFIX = 'starlight-bell-soundanimation-';
-const CACHE = PREFIX + 'v2026.10.18.15';
+const CACHE = PREFIX + 'v2026.10.18.16';
 const BASE = new URL('./', self.location.href);
-const ASSETS = ['./', './index.html', './style.css?v=2026.10.18.15', './app.js?v=2026.10.18.15', './manifest.json', './icons/192x192.png', './icons/512x512.png'].map(path => new URL(path, BASE).href);
+const ASSETS = [
+  './', './index.html', './style.css?v=2026.10.18.16', './app.js?v=2026.10.18.16',
+  './beatnet-client.js?v=2026.10.18.16', './beatnet-worker.js?v=2026.10.18.16',
+  './beatnet-core.js?v=2026.10.18.16', './beatnet-capture.js?v=2026.10.18.16',
+  './vendor/beatnet/model-1.f32', './vendor/beatnet/manifest.json', './vendor/beatnet/frontend.json',
+  './vendor/beatnet/LICENSE.txt', './vendor/beatnet/NOTICE.md', './vendor/beatnet/MADMOM-LICENSE.txt',
+  './licenses.html', './manifest.json', './icons/192x192.png', './icons/512x512.png'
+].map(path => new URL(path, BASE).href);
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
 });

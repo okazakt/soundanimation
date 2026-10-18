@@ -8,6 +8,7 @@ const code = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 function fixture(getMicrophone, options = {}) {
   let image, now = 0;
   const events = {}, nodes = {}, frames = new Map();
+  const audioContexts = [];
   let nextFrame = 0, stopped = 0, closed = 0, released = 0, requestCount = 0;
   const gradient = { addColorStop() {} };
   const context = new Proxy({
@@ -25,7 +26,7 @@ function fixture(getMicrophone, options = {}) {
   const document = { hidden: false, querySelector: selector => nodes[selector] ||= node(), createElement: node,
     addEventListener(type, fn) { events[type] = fn; } };
   class Audio {
-    constructor() { this.state = 'running'; this.sampleRate = 48000; }
+    constructor() { this.state = 'running'; this.sampleRate = 48000; this.currentTime = 0; audioContexts.push(this); }
     async resume() { this.state = 'running'; }
     async suspend() { this.state = 'suspended'; }
     async close() { if (this.state !== 'closed') closed++; this.state = 'closed'; }
@@ -37,7 +38,7 @@ function fixture(getMicrophone, options = {}) {
     assert.equal(constraints.audio.noiseSuppression, false);
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
-  const window = { AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
+  const window = { BeatNetClient: options.beatNetClient, AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
   // Reproducible visual variation keeps coverage independent of session RNG.
   let randomState = options.randomSeed ?? 0x12345678;
   const deterministicMath = Object.create(Math);
@@ -48,7 +49,7 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatNetState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
@@ -61,7 +62,7 @@ function fixture(getMicrophone, options = {}) {
     chooseGate: (...args) => window.chooseFlockGate(...args),
     stepScene: (values, raw, dt) => window.stepScene(values, raw, dt),
     recordTail: (p, time) => window.recordParticleTail(p, time), drawTail: (p, time) => window.drawParticleTail(p, time),
-    async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
+    async tick(dt = 1 / 60) { for (const context of audioContexts) if (context.state === 'running') context.currentTime += dt; now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const micDevices = [
@@ -174,13 +175,14 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.15'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.16'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
   assert.deepEqual(deleted, ['starlight-bell-soundanimation-v0']);
   await new Promise(resolve => events.install({ waitUntil: p => p.then(resolve) }));
-  assert.equal(cached.length, 7);
+  assert.equal(cached.length, 18);
+  assert.ok(cached.some(url => url.endsWith('/vendor/beatnet/model-1.f32')));
   assert.ok(cached.every(url => url.startsWith('https://example.com/soundanimation/')));
   for (const url of ['https://example.com/', 'https://example.com/script.js', 'https://other.test/soundanimation/app.js', 'https://example.com/soundanimation/unknown']) {
     events.fetch({ request: { method: 'GET', url }, respondWith() { assert.fail('outside request intercepted'); } });
@@ -1001,4 +1003,66 @@ test('slow isolated percussion retains the clock across genuinely silent spaces 
     for (let i = 0; i < 60 * 4; i++) f.stepRhythm(values, 1 / 60);
     assert.ok(!f.inspect().rhythm.tracking, 'a real stop still releases the clock');
   }
+});
+
+
+test('BeatNet drives the renderer when fresh and confident, without corrupting the independent comparison tracker', async () => {
+  const clients = [];
+  class FakeBeatNet {
+    constructor(onState, onStatus) { this.emit = onState; this.onStatus = onStatus; clients.push(this); }
+    async start() { this.onStatus('解析中'); }
+    stop() { this.stopped = true; }
+  }
+  const f = fixture(async stream => stream, { width: 8, height: 8, beatNetClient: FakeBeatNet });
+  await f.nodes['#start'].click(); await flush();
+  f.inspect().audio.currentTime = 10;
+  clients[0].emit({ time: 10, audioTime: 10, lastBeatAudioTime: 9.75, bpm: 120, confidence: .9,
+    quiet: 0, beatCount: 20, beatInBar: 1, meter: 3, meterConfidence: .9,
+    beatProbability: .8, downProbability: .1, meterMass: [.02, .9, .08] });
+  await f.tick();
+  assert.equal(f.inspect().rhythm.engine, 'beatnet');
+  assert.equal(f.inspect().rhythm.meter, 3);
+  assert.equal(f.inspect().rhythm.bpm, 120);
+  assert.equal(f.inspect().basicRhythm.bpm, 0, 'AI does not overwrite the conventional tracker');
+  for (let i = 0; i < 10; i++) await f.tick(.1);
+  assert.equal(f.inspect().rhythm.engine, 'basic', 'stale AI results cannot keep driving the renderer');
+  f.nodes['#analysis-engine'].value = 'basic'; f.nodes['#analysis-engine'].change();
+  assert.ok(clients[0].stopped);
+  clients[0].emit({ bpm: 200 });
+  assert.equal(f.inspect().beatNetState, null, 'late results from a stopped worker are ignored');
+  f.nodes['#stop'].click();
+});
+
+test('BeatNet restarts cleanly across mode changes and background/resume, and stops with the microphone', async () => {
+  const clients = [];
+  class FakeBeatNet {
+    constructor(emit) { this.emit = emit; clients.push(this); }
+    async start() {}
+    stop() { this.stopped = true; }
+  }
+  const f = fixture(async stream => stream, { width: 8, height: 8, beatNetClient: FakeBeatNet });
+  await f.nodes['#start'].click(); await flush();
+  f.nodes['#next-mode'].click();
+  assert.ok(clients[0].stopped); assert.equal(clients.length, 2);
+  f.document.hidden = true; f.events.visibilitychange();
+  assert.ok(clients[1].stopped);
+  f.document.hidden = false; f.events.visibilitychange(); await flush();
+  assert.equal(clients.length, 3);
+  f.nodes['#stop'].click();
+  assert.ok(clients.every(client => client.stopped));
+  clients[2].emit({ bpm: 120 }); assert.equal(f.inspect().beatNetState, null);
+});
+
+test('BeatNet initialization failure retains microphone visualization and reports the fallback', async () => {
+  class BrokenBeatNet {
+    async start() { throw new Error('model unavailable'); }
+    stop() { this.stopped = true; }
+  }
+  const f = fixture(async stream => stream, { width: 8, height: 8, beatNetClient: BrokenBeatNet });
+  await f.nodes['#start'].click(); await flush(); await f.tick();
+  f.nodes['#audio-debug'].open = true; f.nodes['#audio-debug'].toggle();
+  assert.match(f.nodes['#debug-engine'].textContent, /model unavailable.*従来方式/);
+  assert.equal(f.inspect().rhythm.engine, 'basic');
+  assert.equal(f.nodes['#stop'].disabled, false);
+  f.nodes['#stop'].click();
 });

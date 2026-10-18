@@ -53,3 +53,7 @@ button:not(:disabled):active { background: #c4dcff30; }
 .debug-content dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .debug-lamp { color: #a8e8ff; opacity: .15; }
 .debug-note { margin-top: 8px !important; color: #95a7c5; font-size: 10px; }
+
+#analysis-controls { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; padding: 5px 12px; font-size: 11px; color: #a9b9d2; }
+#analysis-engine { max-width: 180px; min-height: 36px; padding: 5px 8px; border: 1px solid #a9bed64d; border-radius: 8px; background: #101426; color: #edf2ff; font: inherit; }
+#analysis-controls a { color: #b6ccef; text-underline-offset: 3px; }

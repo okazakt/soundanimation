@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.15';
+  const VERSION = '2026.10.18.16';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -13,6 +13,57 @@
   const microphoneDialog = document.querySelector('#microphone-dialog');
   const microphoneChoices = document.querySelector('#microphone-choices');
   const microphonePrompt = document.querySelector('#microphone-prompt');
+  const engineSelect = document.querySelector('#analysis-engine');
+  let beatNetClient = null, beatNetState = null, beatNetStatus = '開始するとBeatNetを準備します';
+  let aiActive = false, aiLastTick = -100, aiMotionScale = 1, aiMotionLimit = 1;
+  const wantsBeatNet = () => engineSelect.value !== 'basic';
+  function resetBeatNet() {
+    beatNetClient?.stop(); beatNetClient = null; beatNetState = null;
+    aiActive = false; aiLastTick = -100; aiMotionScale = aiMotionLimit = 1;
+    beatNetStatus = wantsBeatNet() ? '開始するとBeatNetを準備します' : '従来方式';
+    if (running && !demo && audio && source) beginBeatNet();
+  }
+  function beginBeatNet() {
+    if (!wantsBeatNet()) return;
+    if (!window.BeatNetClient) { beatNetStatus = 'BeatNet未対応・従来方式で継続'; return; }
+    const token = generation;
+    const client = new window.BeatNetClient(state => {
+      if (token !== generation || client !== beatNetClient) return;
+      beatNetState = state;
+      if (!state) return;
+      beatNetStatus = state.time > 2 && state.beatCount >= 6 && state.confidence > .55 ? '解析中' : '解析中・拍の学習待ち';
+    }, status => { if (token === generation && client === beatNetClient) beatNetStatus = status; });
+    beatNetClient = client;
+    client.start(audio, source).catch(error => {
+      if (token !== generation || client !== beatNetClient) return;
+      beatNetStatus = `${error.message}・従来方式で継続`; client.stop();
+    });
+  }
+  function selectRhythmEngine(dt) {
+    const state = beatNetState, now = audio?.currentTime;
+    const period = state?.bpm ? 60 / state.bpm : .5;
+    const fresh = state && Number.isFinite(now) && now - state.audioTime < .75 && now >= state.audioTime - .1;
+    const supported = fresh && state.time > 2 && state.beatCount >= 6 && state.bpm >= 55 && state.bpm <= 215 &&
+      state.quiet < Math.max(.6, period * 1.4) && now - state.lastBeatAudioTime < 8;
+    aiActive = !!(wantsBeatNet() && !beatNetClient?.stopped && supported && state.confidence > (aiActive ? .3 : .55));
+    if (!aiActive) { rhythm = basicRhythm; return; }
+    const age = Math.max(0, now - state.lastBeatAudioTime), predicted = Math.floor(age / period), phase = age / period % 1;
+    const tick = state.lastBeatAudioTime + predicted * period;
+    const beat = tick - aiLastTick > period * .6;
+    if (beat) aiLastTick = tick;
+    const meter = state.meterConfidence > .6 ? state.meter : 0;
+    const beatInBar = meter ? ((state.beatInBar - 1 + predicted) % meter + meter) % meter + 1 : 0;
+    const tempoSpeed = clamp(Math.pow(state.bpm / 120, 1.2), .5, 1.65);
+    aiMotionScale = lerp(aiMotionScale, lerp(1, tempoSpeed, state.confidence), 1 - Math.exp(-dt / 1.2));
+    aiMotionLimit = lerp(aiMotionLimit, clamp(tempoSpeed, .45, 1.65), 1 - Math.exp(-dt / 2));
+    rhythm = { ...basicRhythm, engine: 'beatnet', bpm: state.bpm, period, confidence: state.confidence,
+      tracking: true, phase, pulse: Math.exp(-phase * 9), beat, beatCount: state.beatCount + predicted,
+      lastBeat: basicRhythm.time - phase * period, nextBeat: basicRhythm.time + (1 - phase) * period,
+      lastSupport: basicRhythm.time - age, evidence: Math.max(state.beatProbability, state.downProbability),
+      meter, meterConfidence: state.meterConfidence, beatInBar,
+      motionScale: aiMotionScale, motionLimitScale: aiMotionLimit };
+  }
+  engineSelect.addEventListener('change', () => { resetBeatNet(); rhythm = basicRhythm; updateDebug(true); });
   const microphoneConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
   let selectedMicrophone = null, selectionRequired = false, pickerGeneration = 0;
   let resumeAfterSelection = false;
@@ -195,7 +246,7 @@
   const historyTimes = new Float64Array(HISTORY_SIZE);
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
-    prepareFlocks(); resetRhythm(); resetMood(); resetSoundProfile();
+    prepareFlocks(); resetRhythm(); resetMood(); resetSoundProfile(); resetBeatNet();
     rawEnergies.fill(0); energies.fill(0);
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
@@ -326,6 +377,7 @@
     starting = false; running = true; startButton.textContent = '開始';
     microphoneButton.disabled = false;
     intro.classList.add('hidden'); previous = 0;
+    if (!demo) beginBeatNet(); else beatNetStatus = 'デモ入力・従来方式';
     acquireWake(); frameId = requestAnimationFrame(frame);
   }
   function stop() {
@@ -333,6 +385,7 @@
     ++pickerGeneration;
     ++generation; running = false; starting = false;
     cancelAnimationFrame(frameId);
+    beatNetClient?.stop(); beatNetClient = null;
     source?.disconnect(); source = null;
     stream?.getTracks().forEach(track => track.stop()); stream = null;
     if (audio && audio.state !== 'closed') audio.close().catch(() => {});
@@ -386,7 +439,7 @@
       signals[i] = target;
     });
     recordSignals(dt);
-    updateRhythm(dt); updateMood(dt); updateDebug();
+    rhythm = basicRhythm; updateRhythm(dt); selectRhythmEngine(dt); updateMood(dt); updateDebug();
     if (mode === 'flocks') {
       updateFlocks(dt);
       environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
@@ -528,7 +581,7 @@
 
   // Online beat tracking: spectral onsets vote for a tempo, then a gently
   // corrected clock carries the beat between transients. No sound is stored.
-  const rhythm = { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
+  const basicRhythm = { engine: 'basic', time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
     period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1, motionLimitScale: 1, lastReliableBpm: 0, lastReliableTime: -100,
     fluxAverage: 0, quiet: 0, onset: false, beat: false,
     tempoCandidate: 0, tempoCandidateSince: 0, tempoCandidateCount: 0, tracking: false, lastSupport: -100, phaseCoherence: 0, evidence: 0, pendingTempo: 0, pendingTempoSince: 0, pendingTempoCount: 0,
@@ -536,7 +589,9 @@
     meterTracking: false, meterScores: [0, 0], meterLastSupport: -100, meterFit: 0, meterMargin: 0,
     meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [],
     previous: new Float64Array(N), pitchClasses: [], pitchMaximum: 0, votes: new Float64Array(181), events: [], featureHistory: [] };
+  let rhythm = basicRhythm;
   function resetRhythm() {
+    rhythm = basicRhythm;
     Object.assign(rhythm, { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
       period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1, motionLimitScale: 1, lastReliableBpm: 0, lastReliableTime: -100,
       fluxAverage: 0, quiet: 0, onset: false, beat: false,
@@ -967,7 +1022,7 @@
     m.confidence = lerp(clamp(mean * 12, .2, 1), m.confidence, Math.exp(-dt / 4));
   }
   const debugPanel = document.querySelector('#audio-debug');
-  const debugFields = Object.fromEntries(['input', 'tempo', 'tracking', 'beat', 'onset', 'meter', 'meter-evidence', 'position', 'window', 'mood', 'timbre']
+  const debugFields = Object.fromEntries(['input', 'engine', 'ai', 'comparison', 'tempo', 'tracking', 'beat', 'onset', 'meter', 'meter-evidence', 'position', 'window', 'mood', 'timbre']
     .map(key => [key, document.querySelector(`#debug-${key}`)]));
   let debugLastTime = -Infinity;
   function updateDebug(force = false) {
@@ -986,13 +1041,18 @@
     debugLastTime = r.time;
     const pct = value => `${Math.round(clamp(value, 0, 1) * 100)}%`;
     const set = (key, text) => { if (debugFields[key].textContent !== text) debugFields[key].textContent = text; };
+    set('engine', wantsBeatNet() ? `BeatNet（試験） · ${beatNetStatus}${running && r.engine !== 'beatnet' ? '／従来方式で表示' : ''}` : '従来方式');
+    const ai = beatNetState;
+    const aiFresh = ai && audio && audio.currentTime - ai.audioTime < .75 && !beatNetClient?.stopped;
+    set('ai', running && aiFresh ? `拍 ${pct(ai.beatProbability)} / 小節頭 ${pct(ai.downProbability)} · ${ai.processedFrames ? (ai.processingMs / ai.processedFrames).toFixed(1) : '—'}ms/フレーム` : '—');
+    set('comparison', running ? `${basicRhythm.tracking ? basicRhythm.bpm.toFixed(1) + ' BPM' : 'テンポ未確定'} / ${basicRhythm.meterConfidence > .5 ? basicRhythm.meter + '拍子系' : '拍子未確定'}` : '—');
     set('input', !running ? '停止中' : `${demo ? 'デモ入力' : 'マイク入力'} · ${audible ? '解析中' : '無音／入力待ち'}`);
     set('tempo', locked ? `${r.bpm.toFixed(1)} BPM / ${(r.bpm / 60).toFixed(2)} BPS · 確かさ ${pct(r.confidence)}` : `— BPM / — BPS · ${audible ? '推定中' : '判定待ち'}`);
-    set('tracking', locked ? `${r.evidence > .35 && r.time - r.lastSupport < Math.max(.75, r.period * 1.5) ? '追従中' : '履歴で継続'} · 最終支持 ${Math.max(0, r.time - r.lastSupport).toFixed(1)}秒前` : '推定待ち');
-    set('meter-evidence', audible ? `3拍 ${pct(r.meterScores[0])} / 4拍 ${pct(r.meterScores[1])} · 候補差 ${pct(r.meterMargin)}` : '—');
+    set('tracking', locked ? `${(r.engine === 'beatnet' || r.evidence > .35) && r.time - r.lastSupport < Math.max(.75, r.period * 1.5) ? '追従中' : '履歴で継続'} · 最終支持 ${Math.max(0, r.time - r.lastSupport).toFixed(1)}秒前` : '推定待ち');
+    set('meter-evidence', audible && r.engine === 'beatnet' && ai ? `2拍 ${pct(ai.meterMass[0])} / 3拍 ${pct(ai.meterMass[1])} / 4拍 ${pct(ai.meterMass[2])}` : audible ? `3拍 ${pct(r.meterScores[0])} / 4拍 ${pct(r.meterScores[1])} · 候補差 ${pct(r.meterMargin)}` : '—');
     set('meter', meterKnown ? `${r.meter}拍子系 · 確かさ ${pct(r.meterConfidence)}` : `未確定 · 確かさ ${pct(audible ? r.meterConfidence : 0)}`);
     set('position', meterKnown ? Array.from({ length: r.meter }, (_, i) => `${i + 1 === r.beatInBar ? '●' : '○'}${i + 1}`).join('  ') : '—');
-    set('window', `直近48拍${locked ? ` ≈ ${(48 * r.period).toFixed(1)}秒` : ''} · 記録 ${r.accents.filter(a => a.index < r.beatCount).length}拍 · 最低3周期`);
+    set('window', r.engine === 'beatnet' ? 'BeatNet逐次CRNN＋粒子追跡（50Hz）' : `直近48拍${locked ? ` ≈ ${(48 * r.period).toFixed(1)}秒` : ''} · 記録 ${r.accents.filter(a => a.index < r.beatCount).length}拍 · 最低3周期`);
     const expression = `${m.warmth > .15 ? '明るめ' : m.warmth < -.15 ? '陰影あり' : '中間'}・${m.activity > .55 ? '活発' : m.activity < .3 ? '穏やか' : '中程度の動き'}`;
     set('mood', audible ? `${expression} · 活動 ${pct(m.activity)} / 緊張 ${pct(m.tension)} / 確かさ ${pct(m.confidence)}` : '—');
     set('timbre', audible ? `${m.brightness < .35 ? '低域寄り' : m.brightness > .65 ? '高域寄り' : '中域寄り'}・${m.flatness > .45 ? 'ノイズ的' : '倍音的'}（明るさ ${pct(m.brightness)} / 平坦度 ${pct(m.flatness)}）` : '—');
@@ -1689,9 +1749,12 @@
   document.addEventListener('visibilitychange', () => {
     cancelAnimationFrame(frameId); previous = 0;
     if (document.hidden) {
+      beatNetClient?.stop(); beatNetClient = null; beatNetState = null; aiActive = false;
+      beatNetStatus = '一時停止';
       if (wake) { wake.release().catch(() => {}); wake = null; }
       if (audio?.state === 'running') audio.suspend().catch(() => {});
     } else if (running) {
+      if (!demo && audio && source) beginBeatNet();
       audio?.resume().catch(() => message('音声を再開できませんでした。「終了」の後に「開始」を押してください。'));
       acquireWake(); frameId = requestAnimationFrame(frame);
     }

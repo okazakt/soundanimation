@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>帰属・ライセンス — Starlight Bell</title>
+<style>body{margin:32px auto;padding:0 20px;max-width:760px;background:#050714;color:#edf2ff;font:15px/1.9 system-ui,sans-serif}a{color:#b6ccef}h1{font-size:24px}h2{font-size:18px}p{overflow-wrap:anywhere}</style></head><body>
+<h1>帰属・ライセンス</h1>
+<h2>BeatNet（試験的なJavaScript移植）</h2>
+<p>このアプリは、Mojtaba Heydari、Frank Cwitkowitz、Zhiyao Duanによる <a href="https://github.com/mjhydri/BeatNet">BeatNet</a> の学習済みモデルとアルゴリズムを使用しています。</p>
+<p>論文：<a href="https://arxiv.org/abs/2108.03576">BeatNet: CRNN and Particle Filtering for Online Joint Beat Downbeat and Meter Tracking</a>（ISMIR 2021）。元コードの著者：Mojtaba Heydari。</p>
+<p><a href="https://creativecommons.org/licenses/by/4.0/">Creative Commons Attribution 4.0 International（CC BY 4.0）</a>に基づき使用・改変しています。<a href="./vendor/beatnet/LICENSE.txt">ライセンス全文</a>。</p>
+<p>変更点：公開モデル1の数値を変更せずfloat32形式へ変換し、前処理・ニューラルネットワーク・粒子追跡をJavaScriptへ移植しました。ブラウザ向けに音声リサンプリング、固定数の粒子、遅延・無音時の制御、従来方式への切り替えを加えています。元著者による公式移植・推奨を意味しません。</p>
+<p>モデルと出典の詳細：<a href="./vendor/beatnet/NOTICE.md">帰属・変更記録</a>、<a href="./vendor/beatnet/manifest.json">モデルの出典・ハッシュ</a>。</p>
+<h2>madmomの前処理・状態空間の規約</h2>
+<p>Sebastian Böck、Florian Krebsほかの<a href="https://github.com/CPJKU/madmom">madmom</a>を参考に、フィルタ係数と状態空間を再現しています。<a href="./vendor/beatnet/MADMOM-LICENSE.txt">BSD-3-Clauseライセンス</a>。madmomの学習済みモデルは使用していません。</p>
+<p>マイク音声の解析は端末内で行い、解析サーバーへの音声送信は行いません。</p>
+<p><a href="./">アプリに戻る</a></p>
+</body></html>

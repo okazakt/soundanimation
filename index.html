@@ -8,9 +8,10 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.15">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.16">
   <title>Starlight Bell</title>
-  <script src="./app.js?v=2026.10.18.15" defer></script>
+  <script src="./beatnet-client.js?v=2026.10.18.16" defer></script>
+  <script src="./app.js?v=2026.10.18.16" defer></script>
 </head>
 <body>
   <main id="sky" aria-label="音に反応する光のアニメーション">
@@ -23,6 +24,9 @@
       <div class="debug-content">
         <p id="debug-input">停止中</p>
         <dl>
+          <dt>解析器</dt><dd id="debug-engine">BeatNet準備待ち</dd>
+          <dt>AIの反応</dt><dd id="debug-ai">—</dd>
+          <dt>比較・従来</dt><dd id="debug-comparison">—</dd>
           <dt>テンポ</dt><dd id="debug-tempo">— BPM / — BPS</dd>
           <dt>推定の状態</dt><dd id="debug-tracking">推定待ち</dd>
           <dt>リズム点灯</dt><dd><span id="debug-beat" class="debug-lamp">●</span> 推定拍 <span id="debug-onset" class="debug-lamp">●</span> 音の立ち上がり</dd>
@@ -33,12 +37,17 @@
           <dt>音楽の表情</dt><dd id="debug-mood">—</dd>
           <dt>音色の特徴</dt><dd id="debug-timbre">—</dd>
         </dl>
-        <p class="debug-note">拍子は3拍子系・4拍子系の推定。音色は音響特徴で、楽器名の識別ではありません。</p>
+        <p class="debug-note">BeatNetは2〜4拍子系、従来方式は3・4拍子系の推定。音色は音響特徴で、楽器名の識別ではありません。</p>
       </div>
     </details>
     <div id="intro"><p class="eyebrow">STARLIGHT BELL</p><h1 id="intro-title">音を、光の動きに。</h1><p>下の「開始」を押して<br>音の流れを眺める</p></div>
     <p id="notice" role="status" aria-live="polite"></p>
   </main>
+  <div id="analysis-controls">
+    <label for="analysis-engine">解析方式</label>
+    <select id="analysis-engine"><option value="beatnet" selected>BeatNet AI（試験）</option><option value="basic">従来方式</option></select>
+    <a href="./licenses.html" target="_blank" rel="noopener">帰属・ライセンス</a>
+  </div>
   <div id="microphone-controls">
     <button id="choose-microphone" type="button" aria-haspopup="dialog">使用マイク指定</button>
     <p id="microphone-name" role="status" aria-live="polite">未指定（自動選択）</p>

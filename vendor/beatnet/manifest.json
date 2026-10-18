@@ -1,0 +1,122 @@
+{
+  "name": "BeatNet model 1 (GTZAN excluded)",
+  "source": "https://github.com/mjhydri/BeatNet",
+  "revision": "81cedd4beeb7235262db80969a0c9ce9a48a0ed4",
+  "sourceWeights": "src/BeatNet/models/model_1_weights.pt",
+  "sourceSha256": "619091bc317ca3e83b45591d46f6de3d5a41588bcb39fe9fe7be30cffa6aca84",
+  "sha256": "731bdfe007b875912451e77243dcaf250bbc99d777b8c27a3f477cb249dbf6d0",
+  "license": "CC-BY-4.0",
+  "dtype": "float32-le",
+  "inputSize": 272,
+  "hiddenSize": 150,
+  "layers": 2,
+  "weights": {
+    "conv1.weight": {
+      "offset": 0,
+      "shape": [
+        2,
+        1,
+        10
+      ],
+      "length": 20
+    },
+    "conv1.bias": {
+      "offset": 20,
+      "shape": [
+        2
+      ],
+      "length": 2
+    },
+    "linear0.weight": {
+      "offset": 22,
+      "shape": [
+        150,
+        262
+      ],
+      "length": 39300
+    },
+    "linear0.bias": {
+      "offset": 39322,
+      "shape": [
+        150
+      ],
+      "length": 150
+    },
+    "lstm.weight_ih_l0": {
+      "offset": 39472,
+      "shape": [
+        600,
+        150
+      ],
+      "length": 90000
+    },
+    "lstm.weight_hh_l0": {
+      "offset": 129472,
+      "shape": [
+        600,
+        150
+      ],
+      "length": 90000
+    },
+    "lstm.bias_ih_l0": {
+      "offset": 219472,
+      "shape": [
+        600
+      ],
+      "length": 600
+    },
+    "lstm.bias_hh_l0": {
+      "offset": 220072,
+      "shape": [
+        600
+      ],
+      "length": 600
+    },
+    "lstm.weight_ih_l1": {
+      "offset": 220672,
+      "shape": [
+        600,
+        150
+      ],
+      "length": 90000
+    },
+    "lstm.weight_hh_l1": {
+      "offset": 310672,
+      "shape": [
+        600,
+        150
+      ],
+      "length": 90000
+    },
+    "lstm.bias_ih_l1": {
+      "offset": 400672,
+      "shape": [
+        600
+      ],
+      "length": 600
+    },
+    "lstm.bias_hh_l1": {
+      "offset": 401272,
+      "shape": [
+        600
+      ],
+      "length": 600
+    },
+    "linear.weight": {
+      "offset": 401872,
+      "shape": [
+        3,
+        150
+      ],
+      "length": 450
+    },
+    "linear.bias": {
+      "offset": 402322,
+      "shape": [
+        3
+      ],
+      "length": 3
+    }
+  },
+  "bytes": 1609300
+}
