@@ -38,11 +38,13 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood, focus });\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
+    split: (g, p) => window.splitParticle(g, p), merge: (p, q) => window.mergeParticles(p, q),
+    stepSoundProfile: (values, dt) => window.stepSoundProfile(values, dt),
     speedLimit: () => window.particleSpeedLimit(), stepFocus: (dt, audible = true) => window.stepFocus(dt, audible),
     stepColourBreath: (dt, audible = true) => window.stepColourBreath(dt, audible),
     stepMood: (values, dt) => window.stepMood(values, dt), colour: (p, g) => window.particleColour(p, g),
@@ -87,7 +89,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.8'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.9'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -621,4 +623,47 @@ test('central focus bobs slowly and occasional surrounding foci fade without mul
   assert.ok(counts.has(0) && counts.has(1));
   for (let i = 0; i < 120; i++) f.stepFocus(.1, false);
   assert.ok(focus.strength < .001 && focus.satellites.length === 0);
+});
+
+test('splitting conserves visible area, centre of mass and linear momentum within the tempo ceiling', () => {
+  const f = fixture(async stream => stream, { width: 390, height: 740 });
+  const g = f.inspect().flocks[0]; g.population = 64;
+  const p = g.particles[0], q = g.particles[64];
+  Object.assign(p, { size: 9, x: 100, y: 120, vx: 35, vy: -12, alpha: .9, reactionAfter: 0, travelState: 0 });
+  const mass = p.size ** 2, before = { x: p.x, y: p.y, vx: p.vx, vy: p.vy };
+  assert.equal(f.split(g, p), true);
+  const a = p.size ** 2, b = q.size ** 2;
+  assert.ok(Math.abs(a + b - mass) < 1e-9);
+  for (const key of ['x', 'y', 'vx', 'vy']) assert.ok(Math.abs((p[key] * a + q[key] * b) / mass - before[key]) < 1e-9);
+  assert.ok(Math.hypot(p.vx, p.vy) <= f.speedLimit() && Math.hypot(q.vx, q.vy) <= f.speedLimit());
+  assert.ok(Math.hypot(p.vx - q.vx, p.vy - q.vy) > 1);
+  assert.equal(g.particles.length, 128); assert.equal(f.split(g, p), false, 'cannot repeatedly split immediately');
+});
+test('gentle small-particle collisions merge with conserved area and momentum and dissipated relative energy', () => {
+  const f = fixture(async stream => stream, { width: 390, height: 740 });
+  const [p, q] = f.inspect().flocks[0].particles;
+  Object.assign(p, { size: 1, x: 100, y: 100, vx: 3, vy: 1, alpha: 1 });
+  Object.assign(q, { size: 2, x: 102, y: 100, vx: -1, vy: 1, alpha: 1 });
+  const energy = .5 * (1 * 10 + 4 * 2);
+  assert.equal(f.merge(p, q), true);
+  assert.ok(Math.abs(p.size ** 2 - 5) < 1e-9);
+  assert.ok(Math.abs(p.vx - -.2) < 1e-9 && p.vy === 1);
+  assert.ok(Math.abs(p.x - 101.6) < 1e-9);
+  assert.ok(.5 * p.size ** 2 * (p.vx ** 2 + p.vy ** 2) < energy);
+  assert.equal(q.alpha, 0); assert.ok(q.dormantUntil > 0);
+  assert.equal(f.merge(p, q), false);
+});
+test('spectral variety and intensity raise the flock budget smoothly, while individuals differ in cohesion', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const simple = new Float64Array(512), rich = new Float64Array(512), intense = new Float64Array(512);
+  simple[100] = .5; rich.fill(.12); intense.fill(.65);
+  for (let i = 0; i < 100; i++) f.stepSoundProfile(simple, .1);
+  const sparse = f.inspect().soundProfile.budget;
+  for (let i = 0; i < 100; i++) f.stepSoundProfile(rich, .1);
+  const varied = f.inspect().soundProfile.budget;
+  for (let i = 0; i < 100; i++) f.stepSoundProfile(intense, .1);
+  const loud = f.inspect().soundProfile.budget;
+  assert.ok(sparse <= 2 && varied >= 6 && loud > varied && loud <= 10, `${sparse},${varied},${loud}`);
+  const cohesion = f.inspect().flocks.flatMap(g => g.particles.map(p => p.cohesion));
+  assert.ok(Math.min(...cohesion) < .5 && Math.max(...cohesion) > 1.2);
 });

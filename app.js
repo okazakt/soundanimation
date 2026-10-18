@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.8';
+  const VERSION = '2026.10.18.9';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -113,7 +113,7 @@
   const historyTimes = new Float64Array(HISTORY_SIZE);
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
-    prepareFlocks(); resetRhythm(); resetMood();
+    prepareFlocks(); resetRhythm(); resetMood(); resetSoundProfile();
     rawEnergies.fill(0); energies.fill(0);
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
@@ -732,10 +732,86 @@
       p.band = low + Math.floor(p.tint * (high - low));
       Object.assign(spare, { x: owner.x, y: owner.y, vx: owner.vx, vy: owner.vy,
         alpha: 0, strength: 0, travelState: 0, travelTarget: -1, travelAge: 0,
-        tailCount: 0, tailHead: 0, tailTime: -10,
+        tailCount: 0, tailHead: 0, tailTime: -10, dormantUntil: 0,
         guestUntil: 0, nextTrip: elapsed + 10 + spare.tint * 12,
         band: flockRanges[owner.region] + Math.floor(spare.tint * (flockRanges[owner.region + 1] - flockRanges[owner.region])) });
     }
+  }
+  const soundProfile = { diversity: 0, intensity: 0, budget: 1, splits: 0, merges: 0 };
+  function resetSoundProfile() { Object.assign(soundProfile, { diversity: 0, intensity: 0, budget: 1, splits: 0, merges: 0 }); }
+  function updateSoundProfile(dt) {
+    const buckets = new Float64Array(32);
+    let power = 0;
+    for (let i = 0; i < N; i++) { const value = rawEnergies[i] ** 2; buckets[Math.floor(i / 16)] += value; power += value; }
+    let entropy = 0;
+    if (power > .0001) for (const value of buckets) { const p = value / power; if (p > 0) entropy -= p * Math.log(p); }
+    const diversity = clamp((entropy / Math.log(32) - .12) / .78, 0, 1);
+    const intensity = clamp(Math.sqrt(power / N) * 2.5 + rhythm.fluxAverage * 6, 0, 1);
+    soundProfile.diversity = lerp(diversity, soundProfile.diversity, Math.exp(-dt / 1.8));
+    soundProfile.intensity = lerp(intensity, soundProfile.intensity, Math.exp(-dt / 1));
+    soundProfile.budget = Math.round(1 + soundProfile.diversity * 5 + soundProfile.intensity * 4);
+  }
+  function splitParticle(f, p) {
+    const slot = guestSlot(f);
+    if (slot < 0 || p.size < 5.5 || p.travelState || p.reactionAfter > elapsed) return false;
+    const q = f.particles[slot], mass = p.size ** 2, fraction = .4 + p.tint * .2;
+    const nx = Math.cos(p.angle), ny = Math.sin(p.angle), maximum = particleSpeedLimit();
+    let kick = Math.min(16, maximum * .16);
+    for (let i = 0; i < 10; i++) {
+      if (Math.hypot(p.vx + nx * kick * (1 - fraction), p.vy + ny * kick * (1 - fraction)) <= maximum &&
+        Math.hypot(p.vx - nx * kick * fraction, p.vy - ny * kick * fraction) <= maximum) break;
+      kick *= .5;
+    }
+    if (kick < .1) return false;
+    const x = p.x, y = p.y, vx = p.vx, vy = p.vy, separation = p.size * .6;
+    const child = { size: Math.sqrt(mass * (1 - fraction)),
+      x: x - nx * separation * fraction, y: y - ny * separation * fraction,
+      vx: vx - nx * kick * fraction, vy: vy - ny * kick * fraction,
+      alpha: p.alpha, strength: p.strength, band: p.band, baseTone: p.baseTone,
+      tint: clamp(p.tint + .025, 0, .999), colorPhase: p.colorPhase + .1, colorRebel: p.colorRebel,
+      cohesion: clamp(p.cohesion - .05, .35, 1.35), travelState: 0, travelTarget: -1, travelAge: 0,
+      guestUntil: elapsed + 10, dormantUntil: 0, nextTrip: elapsed + 12, reactionAfter: elapsed + 14,
+      tailCount: 0, tailHead: 0, tailTime: -10, mirrorX: p.mirrorX, mirrorY: p.mirrorY, mvx: p.mvx, mvy: p.mvy };
+    Object.assign(q, child);
+    p.size = Math.sqrt(mass * fraction);
+    p.x = x + nx * separation * (1 - fraction); p.y = y + ny * separation * (1 - fraction);
+    p.vx = vx + nx * kick * (1 - fraction); p.vy = vy + ny * kick * (1 - fraction);
+    p.reactionAfter = elapsed + 14; p.guestUntil = Math.max(p.guestUntil, elapsed + 10);
+    p.tailCount = p.tailHead = 0; p.tailTime = -10;
+    soundProfile.splits++; return true;
+  }
+  function mergeParticles(p, q) {
+    if (p === q || p.travelState || q.travelState || p.alpha < .4 || q.alpha < .4 ||
+      p.size > 2.4 || q.size > 2.4 || p.dormantUntil > elapsed || q.dormantUntil > elapsed ||
+      p.reactionAfter > elapsed || q.reactionAfter > elapsed) return false;
+    const dx = p.x - q.x, dy = p.y - q.y, ux = p.vx - q.vx, uy = p.vy - q.vy;
+    if (Math.hypot(dx, dy) > Math.max(1.5, (p.size + q.size) * 1.5) ||
+      Math.hypot(ux, uy) > particleSpeedLimit() * .3 || dx * ux + dy * uy > .1) return false;
+    const a = p.size ** 2, b = q.size ** 2, mass = a + b;
+    p.x = (p.x * a + q.x * b) / mass; p.y = (p.y * a + q.y * b) / mass;
+    p.vx = (p.vx * a + q.vx * b) / mass; p.vy = (p.vy * a + q.vy * b) / mass;
+    p.size = Math.sqrt(mass); p.baseTone = (p.baseTone * a + q.baseTone * b) / mass;
+    p.cohesion = (p.cohesion * a + q.cohesion * b) / mass;
+    p.reactionAfter = elapsed + 12; p.guestUntil = Math.max(p.guestUntil, elapsed + 8);
+    p.tailCount = p.tailHead = 0; p.tailTime = -10;
+    q.alpha = 0; q.dormantUntil = elapsed + 12; q.guestUntil = 0; q.reactionAfter = elapsed + 12;
+    q.tailCount = q.tailHead = 0;
+    soundProfile.merges++; return true;
+  }
+  function reactFlock(f) {
+    if (!f.active || f.exiting || f.presence < .7 || elapsed < f.nextReaction) return;
+    if (rhythm.confidence > .35 && !rhythm.beat && elapsed - f.nextReaction < 1.2) return;
+    const live = f.particles.filter(p => p.alpha > .4 && p.dormantUntil <= elapsed && !p.travelState && p.reactionAfter <= elapsed);
+    let reacted = false;
+    const split = () => { const p = live.find(p => p.size >= 5.5); return p ? splitParticle(f, p) : false; };
+    const merge = () => {
+      const small = live.filter(p => p.size <= 2.4);
+      for (let i = 0; i < small.length; i++) for (let j = i + 1; j < small.length; j++) if (mergeParticles(small[i], small[j])) return true;
+      return false;
+    };
+    reacted = f.reactionTurn % 2 === 0 ? split() || merge() : merge() || split();
+    if (reacted) { f.reactionTurn++; f.nextReaction = elapsed + 8 + hash(f.id, f.reactionTurn, 8052) * 8; }
+    else f.nextReaction = elapsed + .8;
   }
   const focus = { x: 0, y: 0, phase: 0, strength: 0, satellites: [], next: 7, cycle: 0 };
   function particleSpeedLimit() { return 180 * Math.min(width, height) / 390 * rhythm.motionLimitScale; }
@@ -811,6 +887,7 @@
       phaseSpeed: (.8 + (id % 5) * .16) * (.55 + hash(id, 0, 8020) * 1.1),
       speedScale: .55 + hash(id, 0, 8020) * 1.1,
       scale: .7 + hash(id, 0, 8011) * 1.3,
+      nextReaction: 6 + hash(id, 0, 8050) * 8, reactionTurn: id % 2,
       x: width * (.2 + .6 * hash(id, 0, 8001)),
       y: height * (.2 + .6 * hash(id, 0, 8002)),
       heading: hash(id, 0, 8003) * Math.PI * 2,
@@ -821,6 +898,7 @@
         tint: hash(id, j, 8021), colorRebel: hash(id, j, 8040) < .018,
         colorPhase: hash(id, j, 8041) * Math.PI * 2, mirrorX: width / 2, mirrorY: height / 2, mvx: 0, mvy: 0,
         size: particleSize(hash(id, j, 8012)),
+        cohesion: .35 + hash(id, j, 8051), dormantUntil: 0, reactionAfter: 0,
         travelState: 0, travelTarget: -1, travelAge: 0, guestUntil: 0, mirrorWeight: 1,
         tail: new Float64Array(36), tailHead: 0, tailCount: 0, tailTime: -10,
         nextTrip: 4 + hash(id, j, 8030) * 15, driftAngle: 0,
@@ -890,6 +968,10 @@
       backgroundTone, Math.exp(-dt / 1.4));
     backgroundEnergy = lerp(clamp(total / N / .4, 0, 1), backgroundEnergy, Math.exp(-dt / .8));
     const drives = regionDrives();
+    updateSoundProfile(dt);
+    const candidates = flocks.map(f => ({ id: f.id, score: drives[f.region] * (f.voice ? .7 : 1) }))
+      .filter(item => item.score > .025).sort((a, b) => b.score - a.score);
+    const selected = new Set(candidates.slice(0, soundProfile.budget).map(item => item.id));
     updateFocus(dt, Math.max(...drives) > .035);
     const strongest = drives.indexOf(Math.max(...drives));
     const hasVisible = flocks.some(f => f.particles.some(p => p.alpha > .035 &&
@@ -901,7 +983,7 @@
       // add a second voice; a sparse note does not create every flock at once.
       const phraseClock = elapsed / (9 + f.id * .47) + f.id * .173;
       const window = phraseClock % 1;
-      const enabled = f.voice === 0 ? window < .82 : window > .18 && window < .72 && drive > .48;
+      const enabled = selected.has(f.id) && (f.voice === 0 ? window < .82 : window > .18 && window < .72 && drive > .25);
       const safety = rescue && f.id === strongest;
       if (safety && (!f.active || f.particles.some(p => p.alpha > .08))) {
         f.presence = 0; f.active = false;
@@ -916,7 +998,7 @@
             p.vx = Math.cos(p.angle + Math.PI / 2) * 35;
             p.vy = Math.sin(p.angle + Math.PI / 2) * 35; p.alpha = 0;
             p.travelState = 0; p.travelTarget = -1; p.guestUntil = 0;
-            p.tailCount = p.tailHead = 0; p.tailTime = -10; });
+            p.tailCount = p.tailHead = 0; p.tailTime = -10; p.dormantUntil = 0; });
         }
         f.episode++;
         f.exitStyle = (f.id + f.episode - 1) % 4;
@@ -990,21 +1072,22 @@
       // not depend on particle iteration order. A grid bounds mobile CPU cost.
       const cellSize = Math.max(18, Math.min(width, height) * .085);
       const cells = new Map();
-      const members = f.particles.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, alpha: p.alpha, travelling: p.travelState !== 0, guest: p.guestUntil > elapsed }));
+      const members = f.particles.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, alpha: p.alpha, travelling: p.travelState !== 0, dormant: p.dormantUntil > elapsed, guest: p.guestUntil > elapsed }));
       members.forEach((p, j) => {
-        if (p.travelling || (j >= count && !p.guest && p.alpha < .05)) return;
+        if (p.dormant || p.travelling || (j >= count && !p.guest && p.alpha < .05)) return;
         const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)}`;
         if (!cells.has(key)) cells.set(key, []);
         cells.get(key).push(j);
       });
       f.particles.forEach((p, j) => {
+        if (p.dormantUntil > elapsed) { p.alpha = 0; return; }
         p.strength = lerp(clamp(energies[p.band] / Math.max(.06, environment), 0, 1), p.strength, Math.exp(-dt / .12));
         p.alpha = lerp(j < count || p.guestUntil > elapsed || p.travelState ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
         p.baseTone = lerp(p.band / (N - 1), p.baseTone, Math.exp(-dt / 1.4));
         p.mirrorWeight = lerp(p.travelState ? 0 : 1, p.mirrorWeight, Math.exp(-dt / .35));
         if (j >= count && p.alpha < .005 && !f.exiting && !p.travelState) return;
         if (f.exiting) { p.travelState = 0; p.travelTarget = -1; }
-        if (!p.travelState && p.size < .85 && p.alpha > .4 && f.active && !f.exiting &&
+        if (!p.travelState && p.size < .85 && p.cohesion < .85 && p.alpha > .4 && f.active && !f.exiting &&
           elapsed > p.nextTrip && f.particles.filter(q => q.travelState).length < 2 && findTravelHost(f, p)) {
           p.travelState = 1; p.travelAge = 0;
           p.driftAngle = Math.atan2(p.y - f.y, p.x - f.x) + (p.tint - .5) * .7;
@@ -1056,7 +1139,7 @@
           let radial, tangent;
           if (kind === 0 || kind === 1 || kind === 3) {
             const preferred = radius * (kind === 1 ? .85 + p.tint * .13 : .12 + p.distance * .85);
-            radial = (preferred - r) * 1.8;
+            radial = (preferred - r) * 1.8 * p.cohesion;
             tangent = speed * rotation * (kind === 0 ? .6 + p.distance * .4 : 1);
             if (kind === 3) radial += Math.sin(t * .65 + p.tint * 1.4) * speed * .65;
             return [f.vx - ny * tangent + nx * radial, f.vy + nx * tangent + ny * radial];
@@ -1072,7 +1155,7 @@
                 closest = d2; fx = x; fy = y; ux = sx / Math.sqrt(length2); uy = sy / Math.sqrt(length2);
               }
             }
-            return [ux * speed + (fx - p.x) * 2.2, uy * speed + (fy - p.y) * 2.2];
+            return [ux * speed + (fx - p.x) * 2.2 * p.cohesion, uy * speed + (fy - p.y) * 2.2 * p.cohesion];
           }
           // A moving sheet: common forward flow plus a transverse wave, with
           // cohesion keeping it a flock while each individual drifts through it.
@@ -1089,7 +1172,7 @@
         const bend = f.beatTurn * .35;
         let flowX = f.vx + localX * Math.cos(bend) - localY * Math.sin(bend);
         let flowY = f.vy + localX * Math.sin(bend) + localY * Math.cos(bend);
-        if (neighbours) { flowX = lerp(flowX, alignX, .16); flowY = lerp(flowY, alignY, .16); }
+        if (neighbours) { flowX = lerp(flowX, alignX, .08 + p.cohesion * .15); flowY = lerp(flowY, alignY, .08 + p.cohesion * .15); }
         flowX += repelX * 70; flowY += repelY * 70;
         if (p.travelState === 1) {
           flowX = p.vx * .4 + f.vx * .3 + Math.cos(p.driftAngle) * speed * 1.5;
@@ -1137,6 +1220,7 @@
       });
     }
     finishTransfers(transfers);
+    flocks.forEach(reactFlock);
   }
   function recordParticleTail(p, time) {
     if (time - p.tailTime < 1 / 60 - 1e-6) return;
