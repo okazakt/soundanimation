@@ -53,11 +53,11 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawFlocks = () => drawFlocks();\n  window.drawBeatRadiation = () => drawBeatRadiation();\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawFlocks = () => drawFlocks();\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     drawFlocks: () => window.drawFlocks(),
-    drawRadiation: () => window.drawBeatRadiation(),
+    stepMotion: (values, dt) => window.stepMotion(values,dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
     split: (g, p) => window.splitParticle(g, p), merge: (p, q) => window.mergeParticles(p, q),
@@ -181,7 +181,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.29'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.30'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -230,13 +230,13 @@ test('frequency regions select independent flocks, coloured particles and backgr
   assert.notEqual(bass.id, treble.id);
   assert.ok(treble.tone > bass.tone);
 });
-test('bass onset pulses every flock once, sustained sound does not retrigger, silence fades', async () => {
+test('audio onsets never add a second pulse effect and silence still fades', async () => {
   let volume = 0;
   const f = fixture(async stream => stream, { spectrum: data => data.fill(volume) });
   await f.nodes['#start'].click(); await f.tick();
   assert.ok(f.inspect().flocks.every(g => g.presence === 0));
   volume = 180; await f.tick();
-  assert.ok(f.inspect().flocks.every(g => g.pulse === 1));
+  assert.ok(f.inspect().flocks.every(g => g.pulse === 0));
   for (let i = 0; i < 90; i++) await f.tick();
   assert.ok(f.inspect().flocks.every(g => g.pulse < .01));
   volume = 0;
@@ -287,14 +287,14 @@ test('flocks vary in scale, population and motion, with gathering and dispersing
   f.nodes['#stop'].click();
 });
 
-test('beat response stays immediate while speed and heading change with inertia', async () => {
+test('audio changes preserve smooth speed and heading without beat pulses', async () => {
   let volume = 0;
   const f = fixture(async stream => stream, { spectrum: data => data.fill(volume) });
   await f.nodes['#start'].click(); await f.tick();
   volume = 200;
   const before = f.inspect().flocks.map(g => ({ speed: g.phaseSpeed, heading: g.heading }));
   await f.tick();
-  assert.ok(f.inspect().flocks.every(g => g.pulse === 1), 'beat lights remain immediate');
+  assert.ok(f.inspect().flocks.every(g => g.pulse === 0), 'beats do not add another visual pulse');
   f.inspect().flocks.forEach((g, i) => {
     assert.ok(g.phaseSpeed - before[i].speed < .02, 'travel does not jump on the beat');
     assert.ok(Math.abs(g.heading - before[i].heading) <= 1.6 / 60 + 1e-9);
@@ -399,25 +399,14 @@ test('sustained sound and irregular accents do not assert a confident tempo', ()
   assert.equal(f.inspect().rhythm.confidence, 0);
 });
 
-test('recognised beats bend trajectories and change hue smoothly, fading with confidence', () => {
-  const f = fixture(async stream => stream, { width: 8, height: 8 });
-  const { rhythm, flocks } = f.inspect();
-  const g = flocks[0];
-  rhythm.period = .5;
-  const turns = [], hues = [];
-  for (let i = 0; i < 480; i++) {
-    const cycles = i / 30;
-    rhythm.beatCount = Math.floor(cycles); rhythm.phase = cycles % 1; rhythm.confidence = 1;
-    const before = g.beatTurn;
-    f.stepBeatExpression(g, 1 / 60);
-    turns.push(g.beatTurn); hues.push(g.beatHue);
-    assert.ok(Math.abs(g.beatTurn - before) < .03, 'steering changes gradually');
-  }
-  assert.ok(Math.max(...turns) - Math.min(...turns) > .5);
-  assert.ok(Math.max(...hues) - Math.min(...hues) > 40);
-  rhythm.confidence = 0;
-  for (let i = 0; i < 240; i++) f.stepBeatExpression(g, 1 / 60);
-  assert.ok(Math.abs(g.beatTurn) < .001 && Math.abs(g.beatHue) < .001);
+test('recognised beat phases never add trajectory offsets, turns or colour accents',()=>{
+ const f=fixture(async s=>s),{rhythm:r,flocks}=f.inspect(),g=flocks[0];
+ for(let i=0;i<240;i++) {
+  Object.assign(r,{tracking:true,confidence:1,phase:(i/30)%1,beatCount:Math.floor(i/30),meter:4,meterConfidence:1,beatInBar:Math.floor(i/30)%4+1});
+  f.stepBeatExpression(g,1/60);
+  for(const key of ['danceX','danceY','danceSwirl','danceAccent','danceOffsetX','danceOffsetY','beatTurn','beatHue']) assert.equal(g[key],0);
+  assert.equal(g.danceSpread,1);
+ }
 });
 
 test('sizes include fine dust and rare large individuals; migration preserves the same particle', () => {
@@ -466,7 +455,7 @@ test('soft wakes use bounded real position history and curved strokes, expiring 
   assert.equal(curves.length, 0, 'no stale trail bridges a pause');
 });
 
-test('optional lifetimes wait for a fourth beat or downbeat, with silence and blank-screen overrides', () => {
+test('optional lifetimes follow dwell time independently of beats, with silence and blank-screen overrides', () => {
   const f = fixture(async stream => stream, { width: 8, height: 8 });
   const { rhythm: r, flocks } = f.inspect(), g = flocks[0];
   Object.assign(r, { confidence: 1, meter: 4, meterConfidence: .9, beat: false, beatInBar: 2 });
@@ -480,7 +469,7 @@ test('optional lifetimes wait for a fourth beat or downbeat, with silence and bl
   r.beat = false;
   assert.equal(f.chooseGate(g, false, true, false, 6), true);
   r.beat = true; r.beatInBar = 1;
-  assert.equal(f.chooseGate(g, false, true, false, 6.5), false);
+  assert.equal(f.chooseGate(g, false, true, false, 6.7), false);
   assert.equal(f.chooseGate(g, false, true, true, 6.6), true, 'safety restores visible music immediately');
   assert.equal(f.chooseGate(g, true, false, false, 6.7), false, 'real silence bypasses beat waiting');
 });
@@ -595,12 +584,12 @@ test('persistent mood periodically opens to unbiased colour and returns smoothly
   mood.colourBiasGain = 1;
   assert.notEqual(f.colour(p, g).hue, open, 'return follows the latest mood');
 });
-test('colour breathing waits for a recognised bar boundary with a bounded fallback', () => {
+test('colour breathing follows its own slow schedule independently of bar boundaries', () => {
   const f = fixture(async stream => stream, { width: 8, height: 8 });
   const { mood, rhythm } = f.inspect();
   Object.assign(rhythm, { confidence: 1, meterConfidence: .9, beat: true, beatInBar: 3, period: .5 });
   for (let i = 0; i < 105; i++) f.stepColourBreath(.1);
-  assert.equal(mood.colourStage, 0);
+  assert.equal(mood.colourStage, 1);
   rhythm.beatInBar = 1; f.stepColourBreath(.1);
   assert.equal(mood.colourStage, 1);
   f.stepColourBreath(.1, false);
@@ -609,7 +598,7 @@ test('colour breathing waits for a recognised bar boundary with a bounded fallba
   assert.equal(mood.colourBiasGain, 1); assert.equal(mood.colourCycle, 0);
 });
 
-test('tempo ceilings cover flock leaders, particles, mirror partners and disappearance motion', () => {
+test('speed caps cover flock leaders, particles, mirror partners and disappearance motion', () => {
   const f = fixture(async stream => stream, { width: 140, height: 220 });
   const { rhythm } = f.inspect();
   Object.assign(rhythm, { lastReliableBpm: 72, lastReliableTime: 0, motionLimitScale: .55 });
@@ -884,42 +873,6 @@ test('music energy uses tempo and relative attacks rather than treating amplifie
 });
 
 
-test('visible beat steps grow over several cycles, remain bounded and fade after tracking stops', () => {
-  const f=fixture(async s=>s),state=f.inspect(),g=state.flocks[0],r=state.rhythm;
-  Object.assign(state.mood,{activity:.9,tension:.5,confidence:1});
-  const ranges=[[],[]]; let early=0;
-  for(let i=0;i<720;i++) {
-    const cycle=i/30;
-    Object.assign(r,{tracking:true,confidence:.95,period:.5,phase:cycle%1,beatCount:Math.floor(cycle),meter:4,meterConfidence:1,beatInBar:Math.floor(cycle)%4+1});
-    const x=g.danceOffsetX,y=g.danceOffsetY;
-    f.stepBeatExpression(g,1/60);
-    assert.ok(Math.hypot(g.danceOffsetX-x,g.danceOffsetY-y)<=f.speedLimit()*.55/60+1e-9);
-    if(i===29) early=g.danceLock;
-    if(i>480) {ranges[0].push(g.danceOffsetX);ranges[1].push(g.danceOffsetY);}
-  }
-  assert.ok(g.danceLock>early*2);
-  // At phone width the visible step must travel many pixels, rather than
-  // disappearing through the ambient trajectory's cascaded inertia filters.
-  for(const axis of ranges) assert.ok(Math.max(...axis)-Math.min(...axis)>10);
-  Object.assign(r,{tracking:false,confidence:0});
-  for(let i=0;i<240;i++) f.stepBeatExpression(g,1/60);
-  assert.ok(g.danceLock<.001 && Math.hypot(g.danceOffsetX,g.danceOffsetY)<.01);
-});
-
-test('central radiation follows compensated beat age, weights the downbeat and stops without confidence', () => {
-  const arcs=[],f=fixture(async s=>s,{arcs}),state=f.inspect(),r=state.rhythm;
-  state.flocks[0].danceLock=1;
-  Object.assign(r,{confidence:1,period:.5,phase:.2,beatCount:0,meter:4,meterConfidence:1,beatInBar:1});
-  f.drawRadiation();assert.equal(arcs.length,24);
-  const first={...arcs[0]},start=Math.hypot(first.args[0]-195,first.args[1]-370);
-  arcs.length=0;r.phase=.4;f.drawRadiation();
-  const later=Math.hypot(arcs[0].args[0]-195,arcs[0].args[1]-370);
-  assert.ok(Math.abs(later/start-2)<1e-8,'position uses elapsed audio-clock age');
-  arcs.length=0;r.phase=.2;r.beatInBar=2;f.drawRadiation();
-  assert.equal(arcs.length,7);assert.ok(arcs[0].alpha<first.alpha*.5);
-  arcs.length=0;r.confidence=0;f.drawRadiation();assert.equal(arcs.length,0);
-});
-
 test('breathing changes rendered sphere radius without moving the sphere or translating the scene',()=>{
   const ellipses=[],translations=[],f=fixture(async s=>s,{ellipses,translations}),state=f.inspect();
   const g=state.flocks[0],p=g.particles[0];
@@ -930,4 +883,16 @@ test('breathing changes rendered sphere radius without moving the sphere or tran
   assert.deepEqual(small.slice(0,2),large.slice(0,2));
   assert.ok(large[2]>small[2]*2);assert.equal(translations.length,0);
   assert.equal(p.x,123);assert.equal(p.y,234);
+});
+
+test('identical audio and mood produce identical trajectories despite different beat phases and tempos',()=>{
+ const a=fixture(async s=>s),b=fixture(async s=>s),values=new Float64Array(512).fill(.15);
+ for(let frame=0;frame<120;frame++) {
+  for(const [f,tempo,phase] of [[a,75,.1],[b,180,.8]]) {
+   Object.assign(f.inspect().rhythm,{tracking:true,confidence:1,bpm:tempo,period:60/tempo,phase,beat:phase<.2,onset:phase<.2,beatCount:frame,meter:tempo===75?3:4,meterConfidence:1,beatInBar:1,motionScale:tempo/120,motionLimitScale:tempo/120});
+   f.stepMotion(values,1/60);
+  }
+ }
+ const positions=f=>Array.from(f.inspect().flocks,g=>[g.x,g.y,g.phaseSpeed,g.heading,...Array.from(g.particles,p=>[p.x,p.y,p.vx,p.vy]).flat()]);
+ assert.deepEqual(positions(a),positions(b));assert.equal(a.speedLimit(),b.speedLimit());
 });
