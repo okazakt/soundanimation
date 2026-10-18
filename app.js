@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.3';
+  const VERSION = '2026.10.18.4';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -114,6 +114,7 @@
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
     prepareFlocks(); resetRhythm();
+    rawEnergies.fill(0); energies.fill(0);
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
     lights.forEach(light => { light.intensity = 0; light.afterglow = 0; light.litAge = 0; light.fading = false; light.rest = 0; light.meteorReady = true; light.meteorRest = 0; });
@@ -246,6 +247,7 @@
     intro.classList.remove('hidden'); draw();
   }
   const energies = new Float64Array(N);
+  const rawEnergies = new Float64Array(N);
   function update(dt) {
     const frames = dt * 60;
     if (!demo) analyser.getByteFrequencyData(bins);
@@ -264,6 +266,7 @@
         energy = sum / ((end - first + 1) * 255);
       }
       s.baseline = energy < s.baseline ? energy : lerp(energy, s.baseline, Math.pow(.999, frames));
+      rawEnergies[i] = energy;
       energies[i] = Math.max(0, energy - s.baseline * 1.15);
       squares += energies[i] ** 2;
     });
@@ -429,12 +432,45 @@
   const rhythm = { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
     period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1,
     fluxAverage: 0, quiet: 0, onset: false, beat: false,
+    meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [],
     previous: new Float64Array(N), votes: new Float64Array(181), events: [] };
   function resetRhythm() {
     Object.assign(rhythm, { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
       period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1,
-      fluxAverage: 0, quiet: 0, onset: false, beat: false });
+      fluxAverage: 0, quiet: 0, onset: false, beat: false,
+      meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [] });
     rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = [];
+  }
+  function trackMeter(strength) {
+    const r = rhythm;
+    if (r.confidence < .4) return;
+    const offset = (r.time - (r.nextBeat - r.period)) / r.period;
+    const nearest = Math.round(offset);
+    if (Math.abs(offset - nearest) > .23) return;
+    const index = r.beatCount + nearest;
+    const previous = r.accents.find(a => a.index === index);
+    if (previous) previous.strength = Math.max(previous.strength, strength);
+    else r.accents.push({ index, strength });
+    r.accents = r.accents.filter(a => index - a.index < 32);
+    let best = { score: 0, meter: 0, offset: 0 };
+    for (const meter of [3, 4]) {
+      if (r.accents.length < meter * 3) continue;
+      const sums = Array(meter).fill(0), counts = Array(meter).fill(0);
+      for (const a of r.accents) { const k = ((a.index % meter) + meter) % meter; sums[k] += a.strength; counts[k]++; }
+      if (counts.some(n => n < 2)) continue;
+      const means = sums.map((sum, i) => sum / counts[i]);
+      const order = means.map((value, i) => ({ value, i })).sort((a, b) => b.value - a.value);
+      // Require a unique recurring accent. Equal beats or two equal strong
+      // beats cannot establish a downbeat and must remain ambiguous.
+      const contrast = (order[0].value - order[1].value) / Math.max(.001, order[0].value);
+      const confidence = clamp((contrast - .12) / .45, 0, 1);
+      if (confidence > best.score) best = { score: confidence, meter, offset: order[0].i };
+    }
+    if (best.score > .35) {
+      const same = r.meter === best.meter && r.downbeatOffset === best.offset;
+      r.meterConfidence = same ? lerp(r.meterConfidence, best.score, .3) : best.score * .5;
+      r.meter = best.meter; r.downbeatOffset = best.offset;
+    } else r.meterConfidence *= .85;
   }
   function updateRhythm(dt) {
     const r = rhythm;
@@ -513,6 +549,7 @@
         }
       }
     }
+    if (onset) trackMeter(flux);
     const stale = r.time - r.lastOnset > Math.max(1.8, r.period * 3.5);
     if (stale || r.quiet > .15) r.confidence *= Math.exp(-dt / (r.quiet > .15 ? .45 : 1.2));
     if (r.confidence > .3 && r.quiet < .15) {
@@ -524,6 +561,9 @@
       r.pulse = Math.exp(-r.phase * 9);
     } else { r.pulse *= Math.exp(-dt / .18); }
     if (stale && r.confidence < .03) { r.bpm = 0; r.events = []; r.votes.fill(0); }
+    if (r.quiet > .15 || stale) r.meterConfidence *= Math.exp(-dt / .7);
+    if (r.meterConfidence < .15) { r.beatInBar = 0; }
+    else r.beatInBar = ((r.beatCount - r.downbeatOffset) % r.meter + r.meter) % r.meter + 1;
     const tempoSpeed = r.bpm ? clamp(Math.pow(r.bpm / 120, 1.2), .5, 1.65) : 1;
     r.motionScale = lerp(lerp(1, tempoSpeed, r.confidence), r.motionScale, Math.exp(-dt / 1.2));
   }
@@ -577,7 +617,8 @@
     flocks = Array.from({ length: 10 }, (_, id) => ({
       id, region: id % 5, voice: Math.floor(id / 5), episode: 0,
       level: 0, presence: 0, pulse: 0, quiet: 10, collapse: 1,
-      active: false, exiting: false, exitStyle: id % 4, trail: [],
+      active: false, gate: false, pendingGate: null, pendingSince: 0, gateChangedAt: -10, safetyUntil: 0,
+      exiting: false, exitStyle: id % 4, trail: [],
       mirrorType: 0, mirrorAlpha: 0, population: 0, colorShift: 0, beatTurn: 0, beatHue: 0,
       shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0, groove: 0,
       phaseSpeed: (.8 + (id % 5) * .16) * (.55 + hash(id, 0, 8020) * 1.1),
@@ -623,6 +664,41 @@
     f.beatTurn = lerp(turn, f.beatTurn, Math.exp(-dt / .4));
     f.beatHue = lerp(hue, f.beatHue, Math.exp(-dt / clamp(rhythm.period * .24, .12, .24)));
   }
+  function chooseFlockGate(f, wanted, audible, safety, now) {
+    if (!audible) { f.gate = false; f.pendingGate = null; return false; }
+    if (safety) {
+      if (!f.gate) f.gateChangedAt = now;
+      f.gate = true; f.pendingGate = null; f.safetyUntil = now + 2.5; return true;
+    }
+    if (now < f.safetyUntil) return f.gate;
+    if (wanted === f.gate) { f.pendingGate = null; return f.gate; }
+    if (f.gate && now - f.gateChangedAt < 3) return true;
+    if (f.pendingGate !== wanted) { f.pendingGate = wanted; f.pendingSince = now; }
+    const wait = now - f.pendingSince;
+    const locked = rhythm.confidence > .35;
+    const barKnown = rhythm.meterConfidence > .5;
+    const boundary = rhythm.beat && (!barKnown || rhythm.beatInBar === 1 || rhythm.beatInBar === rhythm.meter);
+    if (boundary || (!locked && (rhythm.onset || wait > .6)) || wait > 2.2) {
+      f.gate = wanted; f.pendingGate = null; f.gateChangedAt = now;
+    }
+    return f.gate;
+  }
+  function regionDrives() {
+    return Array.from({ length: 5 }, (_, region) => {
+      let sum = 0, peak = 0, rawSum = 0, rawPeak = 0;
+      const low = flockRanges[region], high = flockRanges[region + 1];
+      for (let i = low; i < high; i++) {
+        sum += energies[i]; peak = Math.max(peak, energies[i]);
+        rawSum += rawEnergies[i]; rawPeak = Math.max(rawPeak, rawEnergies[i]);
+      }
+      const energy = sum / (high - low) * .65 + peak * .35;
+      const reactive = energy < .003 ? 0 : clamp(energy / Math.max(.045, environment * .7), 0, 1);
+      // Baseline subtraction can erase a sustained note. Retain a restrained
+      // response to actual input so adaptation cannot blank audible music.
+      const sustained = rawSum / (high - low) > .025 || rawPeak > .12;
+      return Math.max(reactive, sustained ? clamp((rawSum / (high - low) + rawPeak * .1) * .6, .09, .35) : 0);
+    });
+  }
   function updateFlocks(dt) {
     const transfers = [];
     let total = 0, weighted = 0;
@@ -634,21 +710,24 @@
     backgroundTone = lerp(total > .001 ? weighted / total : backgroundTone,
       backgroundTone, Math.exp(-dt / 1.4));
     backgroundEnergy = lerp(clamp(total / N / .4, 0, 1), backgroundEnergy, Math.exp(-dt / .8));
+    const drives = regionDrives();
+    const strongest = drives.indexOf(Math.max(...drives));
+    const hasVisible = flocks.some(f => f.particles.some(p => p.alpha > .035 &&
+      p.x >= 0 && p.x <= width && p.y >= 0 && p.y <= height));
+    const rescue = drives[strongest] > .035 && !hasVisible;
     for (const f of flocks) {
-      let sum = 0, peak = 0;
-      for (let i = flockRanges[f.region]; i < flockRanges[f.region + 1]; i++) {
-        sum += energies[i]; peak = Math.max(peak, energies[i]);
-      }
-      // Normalise against the listening level, so quiet music also fills the
-      // screen. A raw floor still distinguishes silence from genuine notes.
-      const energy = sum / (flockRanges[f.region + 1] - flockRanges[f.region]) * .65 + peak * .35;
-      const drive = energy < .003 ? 0 : clamp(energy / Math.max(.045, environment * .7), 0, 1);
+      const drive = drives[f.region];
       // Independent voices enter and leave on long phrases. Rich/loud bands can
       // add a second voice; a sparse note does not create every flock at once.
       const phraseClock = elapsed / (9 + f.id * .47) + f.id * .173;
       const window = phraseClock % 1;
       const enabled = f.voice === 0 ? window < .82 : window > .18 && window < .72 && drive > .48;
-      const target = enabled ? drive : 0;
+      const safety = rescue && f.id === strongest;
+      if (safety && (!f.active || f.particles.some(p => p.alpha > .08))) {
+        f.presence = 0; f.active = false;
+      }
+      const gate = chooseFlockGate(f, enabled, drive > .035, safety, elapsed);
+      const target = gate ? drive : 0;
       if (target > .035 && !f.active) {
         if (f.presence < .001) {
           f.trail = [];

@@ -38,11 +38,13 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
+    chooseGate: (...args) => window.chooseFlockGate(...args),
+    stepScene: (values, raw, dt) => window.stepScene(values, raw, dt),
     recordTail: (p, time) => window.recordParticleTail(p, time), drawTail: (p, time) => window.drawParticleTail(p, time),
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
@@ -82,7 +84,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.3'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.4'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -276,9 +278,9 @@ test('visible version identifies the running script and matches cached asset URL
 function rhythmFixture() {
   const f = fixture(async stream => stream, { width: 8, height: 8 });
   const values = new Float64Array(512);
-  return { f, step(dt, accent = false, silent = false, high = false) {
+  return { f, step(dt, accent = false, silent = false, high = false, strength = .65) {
     values.fill(silent ? 0 : .012);
-    if (accent) for (let i = high ? 330 : 0; i < (high ? 512 : 205); i++) values[i] = .65;
+    if (accent) for (let i = high ? 330 : 0; i < (high ? 512 : 205); i++) values[i] = strength;
     f.stepRhythm(values, dt); return f.inspect().rhythm;
   } };
 }
@@ -414,4 +416,57 @@ test('soft wakes use bounded real position history and curved strokes, expiring 
   assert.deepEqual(Array.from(p.tail), snapshot, 'rendering does not move stored points');
   curves.length = 0; f.drawTail(p, 2);
   assert.equal(curves.length, 0, 'no stale trail bridges a pause');
+});
+
+test('repeated accent patterns estimate three or four beats and the downbeat, without forcing equal accents', () => {
+  for (const meter of [3, 4]) {
+    const { f, step } = rhythmFixture();
+    const aligned = [];
+    for (let i = 0; i < 60 * 24; i++) {
+      const strong = Math.floor(i / 30) % meter === 0;
+      const r = step(1 / 60, i % 30 < 3, false, false, strong ? .9 : .28);
+      if (strong && i % 30 === 5 && r.meterConfidence > .5) aligned.push(r.beatInBar);
+    }
+    const r = f.inspect().rhythm;
+    assert.equal(r.meter, meter);
+    assert.ok(r.meterConfidence > .5, `${meter} meter confidence ${r.meterConfidence}`);
+    assert.ok(aligned.length >= 2 && aligned.every(beat => beat === 1), `downbeat ${aligned}`);
+  }
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 60 * 20; i++) step(1 / 60, i % 30 < 3);
+  assert.ok(f.inspect().rhythm.meterConfidence < .2);
+});
+test('optional lifetimes wait for a fourth beat or downbeat, with silence and blank-screen overrides', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const { rhythm: r, flocks } = f.inspect(), g = flocks[0];
+  Object.assign(r, { confidence: 1, meter: 4, meterConfidence: .9, beat: false, beatInBar: 2 });
+  assert.equal(f.chooseGate(g, true, true, false, 1), false);
+  r.beat = true; r.beatInBar = 3;
+  assert.equal(f.chooseGate(g, true, true, false, 1.5), false);
+  r.beatInBar = 4;
+  assert.equal(f.chooseGate(g, true, true, false, 2), true);
+  r.beatInBar = 1;
+  assert.equal(f.chooseGate(g, false, true, false, 2.5), true, 'minimum lifetime prevents busy flashing');
+  r.beat = false;
+  assert.equal(f.chooseGate(g, false, true, false, 6), true);
+  r.beat = true; r.beatInBar = 1;
+  assert.equal(f.chooseGate(g, false, true, false, 6.5), false);
+  assert.equal(f.chooseGate(g, false, true, true, 6.6), true, 'safety restores visible music immediately');
+  assert.equal(f.chooseGate(g, true, false, false, 6.7), false, 'real silence bypasses beat waiting');
+});
+test('sustained audible input stays visible after adaptation and during scheduled gaps, but silence clears', () => {
+  const f = fixture(async stream => stream, { width: 140, height: 220 });
+  const values = new Float64Array(512), raw = new Float64Array(512);
+  raw.fill(.25, 0, 103); // A sustained bass note completely removed by adaptation.
+  let blank = 0, longest = 0;
+  for (let i = 0; i < 180; i++) {
+    if (i === 90) for (const g of f.inspect().flocks) for (const p of g.particles) { p.x = -1000; p.alpha = .5; }
+    f.stepScene(values, raw, .1);
+    const visible = f.inspect().flocks.some(g => g.particles.some(p => p.alpha > .035 && p.x >= 0 && p.x <= 140 && p.y >= 0 && p.y <= 220));
+    blank = visible ? 0 : blank + .1; longest = Math.max(longest, blank);
+  }
+  assert.ok(longest <= .5, `longest blank ${longest}`);
+  raw.fill(0);
+  for (let i = 0; i < 50; i++) f.stepScene(values, raw, .1);
+  assert.ok(f.inspect().flocks.every(g => g.presence < .001));
 });
