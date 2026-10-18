@@ -53,7 +53,7 @@
       this.context = context; this.source = source;
       if (typeof navigator !== 'undefined' && navigator.serviceWorker) await this.prepareStorage(navigator.serviceWorker);
       if (this.stopped) return;
-      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.21', document.baseURI), { type: 'module' });
+      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.22', document.baseURI), { type: 'module' });
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => this.fail('モデル準備がタイムアウトしました（通信・空きメモリを確認）'), 180000);
         this.readyReject = error => { clearTimeout(timer); reject(error); };
@@ -72,13 +72,13 @@
             const age = context.currentTime - data.state.audioTime;
             if (age > 10) { this.fail('処理が入力に追いつきません'); return; }
             this.onState({ ...data.state, receivedAudioTime: context.currentTime });
-            this.onStatus(`解析中 · ${this.provider === 'webgpu' ? 'GPU' : 'CPU'} · 直近${data.state.windowSeconds.toFixed(0)}秒／最短1秒ごと更新${data.state.resyncCount ? ` · 再同期${data.state.resyncCount}回` : ''}`);
+            this.onStatus(`${data.state.quiet ? '入力がほぼ無音・解析待ち' : '解析中'} · ${this.provider === 'webgpu' ? 'GPU' : 'CPU'} · 直近${data.state.windowSeconds.toFixed(0)}秒／最短1秒ごと更新${data.state.resyncCount ? ` · 再同期${data.state.resyncCount}回` : ''}`);
           }
         };
         worker.postMessage({ type: 'load', rate: context.sampleRate });
       });
       if (this.stopped) return;
-      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.18.21', document.baseURI));
+      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.18.22', document.baseURI));
       if (this.stopped) return;
       this.node = new AudioWorkletNode(context, 'beat-this-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       this.node.port.onmessage = ({ data }) => {

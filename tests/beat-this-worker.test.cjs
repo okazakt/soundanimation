@@ -99,3 +99,12 @@ test('quiet microphone windows skip model inference and clear confidence', async
   const s=f.messages.find(m=>m.type==='result').state;
   assert.equal(s.confidence,0);assert.equal(s.meter,0);assert.equal(s.inputGain,0);
 });
+
+test('reported iPhone music level RMS .001 is normalized and sent to the model instead of gated',async()=>{
+  const f=fixture();
+  for(let i=0;i<4;i++) await f.send(i*.5,Float32Array.from({length:11025},(_,j)=>Math.SQRT2*.001*Math.sin(2*Math.PI*100*j/22050)));
+  await f.run();assert.equal(f.windows.length,1);
+  const state=f.messages.find(m=>m.type==='result').state;
+  assert.ok(Math.abs(state.inputRms-.001)<1e-6);assert.ok(state.inputGain>90);
+  assert.equal(state.quiet,0);
+});

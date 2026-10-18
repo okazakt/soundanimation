@@ -8,6 +8,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { chromium } = require('playwright');
 const root = path.resolve(__dirname, '..'), temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'beat-this-browser-'));
+const inputGain = Number(process.env.BEAT_THIS_INPUT_GAIN || 1);
 function synthesize(file, meter) {
   const rate = 16000, length = rate * 26, wav = Buffer.alloc(44 + length * 2);
   wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
@@ -22,7 +23,7 @@ function synthesize(file, meter) {
     const hat = .08 * Math.exp(-(t % .25) * 90) * noise();
     const chord = Math.floor(beat / meter) % 2 ? [293.66, 349.23, 440] : [261.63, 329.63, 392];
     const harmony = chord.reduce((sum, hz) => sum + Math.sin(2 * Math.PI * hz * t) * .012, 0);
-    wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, kick + snare + hat + harmony)) * 32767), 44 + i * 2);
+    wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, (kick + snare + hat + harmony) * inputGain)) * 32767), 44 + i * 2);
   }
   fs.writeFileSync(file, wav);
 }
@@ -42,7 +43,7 @@ function synthesize(file, meter) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}/`;
   try {
-    for (const meter of [3, 4]) {
+    for (const meter of (process.env.BEAT_THIS_METER ? [Number(process.env.BEAT_THIS_METER)] : [3, 4])) {
       const wav = path.join(temporary, `meter-${meter}.wav`); synthesize(wav, meter);
       const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true,
         args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`] });
@@ -63,7 +64,12 @@ function synthesize(file, meter) {
         const result = await page.evaluate(() => ({ bpm: window.beatThisTest().rhythm.bpm, meter: window.beatThisTest().rhythm.meter }));
         if (meter === 4) assert.equal(result.meter, meter); // small0's synthetic triple-meter accuracy is not established.
         assert.ok(Math.abs(result.bpm - 120) < 8); assert.ok(await page.evaluate(() => window.beatThisTest().aiActive)); console.log('PASS microphone → resampler → Beat This! → renderer', result);
-        console.log('STATE', await page.evaluate(() => ({ status: window.beatThisTest().beatThisStatus, debug: document.querySelector('#debug-ai').textContent })));
+        console.log('STATE', await page.evaluate(() => ({ status: window.beatThisTest().beatThisStatus, debug: document.querySelector('#debug-ai').textContent, inputRms: window.beatThisTest().beatThisState?.inputRms, inputGain: window.beatThisTest().beatThisState?.inputGain })));
+        if (inputGain < 1) {
+          const levels = await page.evaluate(() => window.beatThisTest().beatThisState);
+          assert.ok(levels.inputRms > 0 && levels.inputRms < .003, 'low input reproduces the previous silence gate regression');
+          assert.ok(levels.inputGain > 8, 'low input receives enough gain');
+        }
         await page.waitForTimeout(12000);
         assert.ok(await page.evaluate(() => window.beatThisTest().beatThisState.windowSeconds === 8 && !window.beatThisTest().beatThisStatus.includes('リズム判定を停止')), 'rolling inference reaches a full window without accumulating a capture backlog');
         if (meter === 4) await page.screenshot({ path: '/tmp/beat-this-browser.png' });

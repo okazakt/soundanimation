@@ -29,12 +29,22 @@
     }
   }
   function normalize(pcm) {
+    // Remove DC before measuring: a small constant offset is not musical input.
+    let mean = 0;
+    for (const x of pcm) mean += x;
+    mean /= Math.max(1, pcm.length);
     let power = 0, peak = 0;
-    for (const x of pcm) { power += x*x; peak = Math.max(peak, Math.abs(x)); }
+    for (let i = 0; i < pcm.length; i++) {
+      pcm[i] -= mean;
+      power += pcm[i]*pcm[i]; peak = Math.max(peak, Math.abs(pcm[i]));
+    }
     const rms = Math.sqrt(power / Math.max(1, pcm.length));
-    // Gate before gain: never amplify silence. Cap gain and preserve crest factor.
-    const quiet = rms < .003;
-    const gain = quiet ? 0 : Math.min(8, .1 / rms, .95 / Math.max(peak, 1e-9));
+    // Only skip near-digital silence (-100 dBFS). Microphone music at RMS .001
+    // is valid input, not silence. Model confidence decides whether it has beats.
+    const quiet = rms < .00001;
+    // Low-level iPhone input needs about 100x gain, not the previous 8x cap.
+    // One gain per context preserves accents and the peak cap prevents clipping.
+    const gain = quiet ? 0 : Math.min(128, .1 / rms, .95 / Math.max(peak, 1e-9));
     for (let i = 0; i < pcm.length; i++) pcm[i] *= gain;
     return { quiet, rms, gain };
   }

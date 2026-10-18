@@ -40,7 +40,7 @@ test('silence resets probability history and meter, uniform downbeat confidence 
 test('noise gate precedes gain and peak limiting preserves waveform ratios',()=>{
   const silent=new Float32Array(22050).fill(.001);assert.equal(normalize(silent).quiet,true);assert.ok(silent.every(x=>x===0));
   const pcm=Float32Array.of(.01,-.02,.03,-.04),n=normalize(pcm);
-  assert.ok(n.gain<=8);assert.ok(Math.abs(pcm[3]/pcm[0]+4)<1e-5);
+  assert.ok(n.gain<=128);assert.ok(Math.abs((pcm[3]-pcm[2])/(pcm[1]-pcm[0])-7/3)<1e-5);
 });
 test('resampling is independent of input block boundaries and rejects high frequency aliasing',()=>{
   const input=Float32Array.from({length:48000},(_,i)=>Math.sin(2*Math.PI*14000*i/48000));
@@ -48,4 +48,18 @@ test('resampling is independent of input block boundaries and rejects high frequ
   for(let i=0;i<input.length;i+=2048) out.push(...r.process(input.subarray(i,i+2048)));
   assert.deepEqual(Float32Array.from(out),whole);
   assert.ok(Math.sqrt(whole.slice(100).reduce((s,x)=>s+x*x,0)/(whole.length-100))<.05);
+});
+
+for (const rms of [.0001, .001, .0012, .01, .1, .5]) test(`microphone RMS ${rms} reaches inference with finite unclipped normalization`,()=>{
+  const pcm=Float32Array.from({length:22050},(_,i)=>Math.SQRT2*rms*Math.sin(2*Math.PI*100*i/22050));
+  const n=normalize(pcm);
+  assert.equal(n.quiet,false);assert.ok(n.gain>0);
+  const actualRms=Math.sqrt(pcm.reduce((s,x)=>s+x*x,0)/pcm.length);
+  assert.ok(Math.abs(actualRms-Math.min(.1,rms*128))<1e-6);
+  assert.ok(pcm.every(x=>Number.isFinite(x)&&Math.abs(x)<=.951));
+});
+test('digital silence, DC offset and subthreshold noise do not become amplified ghost beats',()=>{
+  for (const pcm of [new Float32Array(22050),new Float32Array(22050).fill(.001),Float32Array.from({length:22050},(_,i)=>Math.sin(i)*.000001)]) {
+    assert.equal(normalize(pcm).quiet,true);assert.ok(pcm.every(x=>x===0));
+  }
 });
