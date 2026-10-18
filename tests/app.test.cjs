@@ -38,11 +38,12 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood });\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood, focus });\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
+    speedLimit: () => window.particleSpeedLimit(), stepFocus: (dt, audible = true) => window.stepFocus(dt, audible),
     stepColourBreath: (dt, audible = true) => window.stepColourBreath(dt, audible),
     stepMood: (values, dt) => window.stepMood(values, dt), colour: (p, g) => window.particleColour(p, g),
     chooseGate: (...args) => window.chooseFlockGate(...args),
@@ -86,7 +87,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.7'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.8'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -154,8 +155,9 @@ test('flocks vary in scale, population and motion, with gathering and dispersing
   const f = fixture(async stream => stream, { spectrum: data => data.fill(volume) });
   await f.nodes['#start'].click();
   const positions = [];
-  for (let i = 0; i < 180; i++) { await f.tick(); positions.push(f.inspect().flocks[0].x); }
-  assert.ok(Math.max(...positions) - Math.min(...positions) > 100);
+  for (let i = 0; i < 180; i++) { await f.tick(); positions.push({ x: f.inspect().flocks[0].x, y: f.inspect().flocks[0].y }); }
+  const distance = positions.reduce((sum, p, i) => i ? sum + Math.hypot(p.x - positions[i - 1].x, p.y - positions[i - 1].y) : 0, 0);
+  assert.ok(distance > 15 && distance <= f.speedLimit() * .68 * 3 + 1, 'leaders travel within the tempo ceiling');
   const active = f.inspect().flocks;
   assert.ok(new Set(active.map(g => Math.floor(g.shape))).size >= 3, 'different motion families coexist');
   assert.ok(Math.max(...active.map(g => g.scale)) / Math.min(...active.map(g => g.scale)) > 1.3);
@@ -175,7 +177,7 @@ test('flocks vary in scale, population and motion, with gathering and dispersing
   assert.ok(live.every(g => g.presence < .02));
   for (const g of live) {
     if (g.exitStyle % 2 === 0) {
-      assert.ok(retiring.get(g).every(p => Math.hypot(p.x - 195, p.y - 370) < 8), 'gathering exits reach the centre');
+      assert.ok(retiring.get(g).every(p => Math.hypot(p.x - f.inspect().focus.x, p.y - f.inspect().focus.y) < 16), 'gathering exits reach the centre');
     } else {
       assert.ok(retiring.get(g).some(p => p.x < 0 || p.x > 390 || p.y < 0 || p.y > 740), 'dispersal exits travel offscreen');
     }
@@ -575,4 +577,48 @@ test('colour breathing waits for a recognised bar boundary with a bounded fallba
   assert.equal(mood.colourStage, 0);
   f.nodes['#next-mode'].click();
   assert.equal(mood.colourBiasGain, 1); assert.equal(mood.colourCycle, 0);
+});
+
+test('tempo ceilings cover flock leaders, particles, mirror partners and disappearance motion', () => {
+  const f = fixture(async stream => stream, { width: 140, height: 220 });
+  const { rhythm } = f.inspect();
+  Object.assign(rhythm, { lastReliableBpm: 72, lastReliableTime: 0, motionLimitScale: .55 });
+  const raw = new Float64Array(512), values = new Float64Array(512); raw.fill(.22); values.fill(.22);
+  for (let i = 0; i < 60; i++) {
+    if (i === 30) { raw.fill(0); values.fill(0); }
+    f.stepScene(values, raw, .1);
+    const limit = f.speedLimit();
+    for (const g of f.inspect().flocks) {
+      assert.ok(Math.hypot(g.vx, g.vy) <= limit * .68 + 1e-6);
+      for (const p of g.particles.filter(p => p.alpha > .035)) {
+        assert.ok(Math.hypot(p.vx, p.vy) <= limit + 1e-6, 'particles never exceed the tempo ceiling');
+        assert.ok(Math.hypot(p.mvx, p.mvy) <= limit + 1e-6, 'reflection never races to catch up');
+      }
+    }
+  }
+  assert.ok(rhythm.motionLimitScale < .65);
+});
+test('slow tempo ceiling survives a brief loss of beat confidence', () => {
+  const { f, step } = rhythmFixture();
+  for (let i = 0; i < 60 * 10; i++) step(1 / 60, i % 40 < 3);
+  assert.ok(f.inspect().rhythm.motionLimitScale < .8);
+  for (let i = 0; i < 60 * 3; i++) step(1 / 60, false, true);
+  assert.ok(f.inspect().rhythm.motionLimitScale < .8, 'a quiet passage cannot immediately raise the ceiling');
+});
+test('central focus bobs slowly and occasional surrounding foci fade without multiplying', () => {
+  const f = fixture(async stream => stream, { width: 390, height: 740 });
+  const { focus, rhythm } = f.inspect(); rhythm.bpm = 90; rhythm.period = 2 / 3;
+  const heights = [], counts = new Set();
+  let previous = focus.y;
+  for (let i = 0; i < 300; i++) {
+    f.stepFocus(.1);
+    heights.push(focus.y); counts.add(focus.satellites.length);
+    assert.ok(Math.abs(focus.y - previous) < 4);
+    assert.ok(focus.satellites.length <= 2);
+    previous = focus.y;
+  }
+  assert.ok(Math.max(...heights) - Math.min(...heights) > 25);
+  assert.ok(counts.has(0) && counts.has(1));
+  for (let i = 0; i < 120; i++) f.stepFocus(.1, false);
+  assert.ok(focus.strength < .001 && focus.satellites.length === 0);
 });

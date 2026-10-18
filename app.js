@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.7';
+  const VERSION = '2026.10.18.8';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -430,13 +430,13 @@
   // Online beat tracking: spectral onsets vote for a tempo, then a gently
   // corrected clock carries the beat between transients. No sound is stored.
   const rhythm = { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
-    period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1,
+    period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1, motionLimitScale: 1, lastReliableBpm: 0, lastReliableTime: -100,
     fluxAverage: 0, quiet: 0, onset: false, beat: false,
     meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [],
     previous: new Float64Array(N), votes: new Float64Array(181), events: [] };
   function resetRhythm() {
     Object.assign(rhythm, { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
-      period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1,
+      period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1, motionLimitScale: 1, lastReliableBpm: 0, lastReliableTime: -100,
       fluxAverage: 0, quiet: 0, onset: false, beat: false,
       meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [] });
     rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = [];
@@ -566,6 +566,10 @@
     else r.beatInBar = ((r.beatCount - r.downbeatOffset) % r.meter + r.meter) % r.meter + 1;
     const tempoSpeed = r.bpm ? clamp(Math.pow(r.bpm / 120, 1.2), .5, 1.65) : 1;
     r.motionScale = lerp(lerp(1, tempoSpeed, r.confidence), r.motionScale, Math.exp(-dt / 1.2));
+    if (r.bpm && r.confidence > .45) { r.lastReliableBpm = r.bpm; r.lastReliableTime = r.time; }
+    const remembered = r.time - r.lastReliableTime < 15 ? r.lastReliableBpm : 0;
+    const ceiling = remembered ? clamp(Math.pow(remembered / 120, 1.2), .45, 1.65) : 1;
+    r.motionLimitScale = lerp(ceiling, r.motionLimitScale, Math.exp(-dt / 2));
   }
 
   // Musical mood is a slow, uncertain audio-feature estimate, not a claim
@@ -733,7 +737,68 @@
         band: flockRanges[owner.region] + Math.floor(spare.tint * (flockRanges[owner.region + 1] - flockRanges[owner.region])) });
     }
   }
+  const focus = { x: 0, y: 0, phase: 0, strength: 0, satellites: [], next: 7, cycle: 0 };
+  function particleSpeedLimit() { return 180 * Math.min(width, height) / 390 * rhythm.motionLimitScale; }
+  function capVelocity(body, maximum) {
+    const scale = Math.min(1, maximum / Math.max(1e-9, Math.hypot(body.vx, body.vy)));
+    body.vx *= scale; body.vy *= scale;
+  }
+  function advanceLeader(f, tx, ty, dt) {
+    const maximum = particleSpeedLimit() * .68;
+    const steps = Math.ceil(dt * 120), h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      let vx = (tx - f.x) * 2.8, vy = (ty - f.y) * 2.8;
+      const scale = Math.min(1, maximum / Math.max(1e-9, Math.hypot(vx, vy)));
+      f.vx = lerp(vx * scale, f.vx, Math.exp(-h / .6));
+      f.vy = lerp(vy * scale, f.vy, Math.exp(-h / .6));
+      capVelocity(f, maximum); f.x += f.vx * h; f.y += f.vy * h;
+    }
+  }
+  function advanceMirror(p, tx, ty, dt) {
+    const maximum = particleSpeedLimit(), steps = Math.ceil(dt * 120), h = dt / steps;
+    const decay = Math.exp(-h / .4);
+    for (let i = 0; i < steps; i++) {
+      const dx = (tx - p.mirrorX) * 3, dy = (ty - p.mirrorY) * 3;
+      const scale = Math.min(1, maximum / Math.max(1e-9, Math.hypot(dx, dy)));
+      p.mvx = lerp(dx * scale, p.mvx, decay); p.mvy = lerp(dy * scale, p.mvy, decay);
+      const cap = Math.min(1, maximum / Math.max(1e-9, Math.hypot(p.mvx, p.mvy)));
+      p.mvx *= cap; p.mvy *= cap;
+      p.mirrorX += p.mvx * h; p.mirrorY += p.mvy * h;
+    }
+  }
+  function updateFocus(dt, audible) {
+    if (audible) focus.phase += Math.PI * 2 * dt / Math.max(3.5, (rhythm.bpm ? rhythm.period : .75) * 8);
+    focus.x = width / 2;
+    focus.y = lerp(height / 2 + Math.sin(focus.phase) * Math.min(26, height * .055), focus.y, Math.exp(-dt / .7));
+    focus.strength = lerp(audible ? 1 : 0, focus.strength, Math.exp(-dt / .8));
+    focus.satellites.forEach(point => {
+      point.age += dt; point.strength = Math.sin(Math.PI * clamp(point.age / point.life, 0, 1)) ** 2;
+      point.y = point.baseY + Math.sin(focus.phase + point.phase) * Math.min(12, height * .025);
+    });
+    focus.satellites = focus.satellites.filter(point => point.age < point.life);
+    if (!audible) { focus.next = elapsed + 7; return; }
+    if (elapsed >= focus.next && focus.satellites.length < 2 &&
+      (rhythm.confidence < .35 || rhythm.beat || elapsed - focus.next > 1.5)) {
+      const angle = focus.cycle * 2.3999632297 + .6;
+      focus.satellites.push({ x: width * (.5 + Math.cos(angle) * .29),
+        y: height * (.5 + Math.sin(angle) * .28), baseY: height * (.5 + Math.sin(angle) * .28), phase: angle, age: 0, life: 7 + 2 * Math.sin(angle) ** 2, strength: 0 });
+      focus.cycle++; focus.next = elapsed + 8 + 3 * Math.sin(focus.cycle * 1.3) ** 2;
+    }
+  }
+  function drawFocusPoints() {
+    const points = [{ x: focus.x, y: focus.y, strength: 1 }, ...focus.satellites];
+    for (const point of points) {
+      const opacity = focus.strength * point.strength;
+      if (opacity < .01) continue;
+      const size = 17 + rhythm.pulse * rhythm.confidence * 3;
+      ctx.globalAlpha = opacity * .23;
+      ctx.drawImage(glows[3][2], point.x - size, point.y - size, size * 2, size * 2);
+      ctx.globalAlpha = opacity * .28; ctx.fillStyle = '#d8eeff';
+      ctx.beginPath(); ctx.arc(point.x, point.y, 1 + rhythm.pulse * .4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
   function prepareFlocks() {
+    Object.assign(focus, { x: width / 2, y: height / 2, phase: 0, strength: 0, satellites: [], next: 7, cycle: 0 });
     beatCooldown = 0;
     backgroundTone = .5; backgroundEnergy = 0;
     flocks = Array.from({ length: 10 }, (_, id) => ({
@@ -764,15 +829,6 @@
         y: height * (.2 + .6 * hash(id, 0, 8002)), alpha: 0, strength: 0, vx: 0, vy: 0
       }))
     }));
-  }
-  // Exact critically damped spring for a fixed target over this frame.
-  // Position and velocity remain continuous when the target changes.
-  function springAxis(body, axis, velocity, target, omega, dt) {
-    const offset = body[axis] - target;
-    const impulse = body[velocity] + omega * offset;
-    const decay = Math.exp(-omega * dt);
-    body[axis] = target + (offset + impulse * dt) * decay;
-    body[velocity] = (body[velocity] - omega * impulse * dt) * decay;
   }
   function updateBeatExpression(f, dt) {
     // Counted beats describe a visual phrase, not an inferred musical meter.
@@ -834,6 +890,7 @@
       backgroundTone, Math.exp(-dt / 1.4));
     backgroundEnergy = lerp(clamp(total / N / .4, 0, 1), backgroundEnergy, Math.exp(-dt / .8));
     const drives = regionDrives();
+    updateFocus(dt, Math.max(...drives) > .035);
     const strongest = drives.indexOf(Math.max(...drives));
     const hasVisible = flocks.some(f => f.particles.some(p => p.alpha > .035 &&
       p.x >= 0 && p.x <= width && p.y >= 0 && p.y <= height));
@@ -911,8 +968,7 @@
       const ct = Math.cos(f.beatTurn), st = Math.sin(f.beatTurn);
       const tx = width * (.5 + (px * ct - py * st) * extent);
       const ty = height * (.5 + (px * st + py * ct) * extent);
-      springAxis(f, 'x', 'vx', tx, 7, dt);
-      springAxis(f, 'y', 'vy', ty, 7, dt);
+      advanceLeader(f, tx, ty, dt);
       if (Math.hypot(f.vx, f.vy) > 3) {
         const desired = Math.atan2(f.vy, f.vx);
         const turn = Math.atan2(Math.sin(desired - f.heading), Math.cos(desired - f.heading));
@@ -1045,12 +1101,17 @@
           flowX = host.vx + dx / d * travelSpeed;
           flowY = host.vy + dy / d * travelSpeed;
         }
+        if (!f.exiting && !p.travelState && p.tint < .28) {
+          const point = focus.satellites.length && p.tint < .12 ? focus.satellites[f.id % focus.satellites.length] : focus;
+          const strength = point.strength * focus.strength * .22;
+          flowX += (point.x - p.x) * strength; flowY += (point.y - p.y) * strength;
+        }
         const steps = Math.max(1, Math.ceil(dt * 120)), h = dt / steps;
         for (let step = 0; step < steps; step++) {
           let vx = flowX, vy = flowY;
           if (f.exiting) {
             const outward = f.exitStyle % 2 === 1;
-            const cx = outward ? f.exitX : width / 2, cy = outward ? f.exitY : height / 2;
+            const cx = outward ? f.exitX : focus.x, cy = outward ? f.exitY : focus.y;
             const dx = p.x - cx, dy = p.y - cy, r = Math.max(1, Math.hypot(dx, dy));
             const spin = f.exitStyle >= 2 ? rotation * 2.8 : 0;
             const radial = outward ? 170 + r * 1.4 : -r * 5.5;
@@ -1066,13 +1127,13 @@
           const limit = f.exiting ? 2600 : 350 * Math.min(width, height) / 390;
           const factor = Math.min(1, limit / Math.max(1, Math.hypot(ax, ay)));
           p.vx += ax * factor * h; p.vy += ay * factor * h;
+          capVelocity(p, particleSpeedLimit());
           p.x += p.vx * h; p.y += p.vy * h;
         }
         recordParticleTail(p, elapsed);
         const mx = f.mirrorType === 1 || f.mirrorType === 3 ? width - p.x : p.x;
         const my = f.mirrorType === 2 || f.mirrorType === 3 ? height - p.y : p.y;
-        springAxis(p, 'mirrorX', 'mvx', mx, 10, dt);
-        springAxis(p, 'mirrorY', 'mvy', my, 10, dt);
+        advanceMirror(p, mx, my, dt);
       });
     }
     finishTransfers(transfers);
@@ -1125,6 +1186,7 @@
     sky.addColorStop(1, `hsl(${hue + 35},55%,${7 + backgroundEnergy * 12}%)`);
     ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
     ctx.globalCompositeOperation = 'lighter';
+    drawFocusPoints();
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
       const colour = particleColour(p, f), hue = colour.hue;
