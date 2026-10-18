@@ -41,7 +41,8 @@ function synthesize(file, meter) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const wav = path.join(temporary, 'four.wav'); synthesize(wav, 4);
   const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`] });
-  let timer, stage = 'setup', peak = {};
+  let timer, stage = 'setup', peak = {}, page, lastAudioTime=-Infinity;
+  const observations=[];
   try {
     const cdp = await browser.newBrowserCDPSession();
     const sample = async () => {
@@ -50,17 +51,21 @@ function synthesize(file, meter) {
         try { const status = fs.readFileSync(`/proc/${proc.id}/status`, 'utf8'); kb += Number(status.match(/^VmRSS:\s+(\d+)/m)?.[1] || 0); } catch {}
       }
       peak[stage] = Math.max(peak[stage] || 0, kb / 1024);
+      if(page) {
+        const s=await page.evaluate(()=>window.beatThisTest?.().beatThisState).catch(()=>null);
+        if(s && s.audioTime!==lastAudioTime) {lastAudioTime=s.audioTime;observations.push({windowSeconds:s.windowSeconds,processingMs:s.processingMs,windowLimitSeconds:s.windowLimitSeconds,hopSeconds:s.hopSeconds});}
+      }
     };
     timer = setInterval(() => sample().catch(() => {}), 250);
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 });
-    const page = await context.newPage();
+    page = await context.newPage();
     page.on('pageerror', error => console.log('PAGEERROR', error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(() => window.ModelSetup?.complete, null, { timeout: 60000 }); await sample();
     stage = 'load';  await page.click('#start');
-    await page.waitForFunction(() => window.beatThisTest().beatThisState?.time >= 8, null, { timeout: 60000 }); await sample();
+    await page.waitForFunction(() => { const s=window.beatThisTest().beatThisState;return s && s.windowSeconds===s.windowLimitSeconds; }, null, { timeout: 60000 }); await sample();
     stage = 'inference'; await page.waitForTimeout(Number(process.env.BEAT_THIS_DURATION_MS || 16000)); await sample();
-    console.log('MEMORY', JSON.stringify({ root, rendererPeakMiB: peak, state: await page.evaluate(() => ({ ...window.beatThisTest().beatThisState, canvasWidth: document.querySelector('#canvas').width, status: window.beatThisTest().beatThisStatus })) }));
+    console.log('MEMORY', JSON.stringify({ root, rendererPeakMiB: peak, observations, state: await page.evaluate(() => ({ ...window.beatThisTest().beatThisState, canvasWidth: document.querySelector('#canvas').width, status: window.beatThisTest().beatThisStatus })) }));
     assert.ok(await page.evaluate(() => window.beatThisTest().beatThisState?.bpm > 0)); await page.click('#stop');
   } finally { clearInterval(timer); await browser.close(); server.close(); fs.rmSync(temporary, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

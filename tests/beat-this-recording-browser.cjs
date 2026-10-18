@@ -52,6 +52,11 @@ const scale=Number(process.env.RECORDING_SCALE||.07),root=path.resolve(__dirname
     assert.ok(state.beatThisState.inputGain>128,'quiet recording exceeds the old gain cap');
     assert.equal(state.latestInputLevel.quiet,false);
     console.log('PASS recording reaches Beat This and renderer',JSON.stringify({bpm:state.rhythm.bpm,confidence:state.rhythm.confidence,inputRms:state.beatThisState.inputRms,inputGain:state.beatThisState.inputGain,adjustedRms:state.beatThisState.adjustedRms}));
+    await page.waitForFunction(()=>{
+      const s=window.recordingState();
+      return s.aiActive && s.beatThisState?.windowSeconds===s.beatThisState?.windowLimitSeconds;
+    },null,{timeout:90000});
+    console.log('PASS recorded music remains tracked at the full available context',await page.evaluate(()=>({windowSeconds:window.recordingState().beatThisState.windowSeconds,bpm:window.recordingState().rhythm.bpm})));
     await page.evaluate(()=>window.recordingVolume(10));await page.waitForTimeout(500);
     const loud=await page.evaluate(()=>window.recordingState().latestInputLevel);
     assert.ok(loud.gain<state.latestInputLevel.gain/10);assert.ok(loud.adjustedRms<=.101);

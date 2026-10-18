@@ -1,0 +1,82 @@
+{
+  "version": "2026.10.18.24",
+  "environment": "Headless desktop Chromium; not an iPhone measurement",
+  "rendererPeakMiB": {
+    "setup": 257.65234375,
+    "load": 609.015625,
+    "inference": 615.76171875
+  },
+  "observations": [
+    {
+      "windowSeconds": 2,
+      "processingMs": 393.59999999962747,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 4,
+      "processingMs": 560.1000000005588,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 6,
+      "processingMs": 886.2000000001863,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 8,
+      "processingMs": 1069,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 10,
+      "processingMs": 1426.5,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 12,
+      "processingMs": 1785.7000000001863,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2.232125000000233
+    },
+    {
+      "windowSeconds": 14,
+      "processingMs": 2201.300000000745,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2.7516250000009315
+    },
+    {
+      "windowSeconds": 16,
+      "processingMs": 1519.3999999994412,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 16,
+      "processingMs": 1433.9000000003725,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 16,
+      "processingMs": 1445.5,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    },
+    {
+      "windowSeconds": 16,
+      "processingMs": 1413.699999999255,
+      "windowLimitSeconds": 16,
+      "hopSeconds": 2
+    }
+  ],
+  "notes": [
+    "Renderer-process RSS sum may double count shared memory.",
+    "Synthetic 4-beat microphone input; 390x844 viewport, deviceScaleFactor 3, canvas backing DPR capped at 2.",
+    "A separate CPU-contended run reduced the maximum window to 12 seconds."
+  ]
+}

@@ -70,8 +70,11 @@ function synthesize(file, meter) {
           assert.ok(levels.inputRms > 0 && levels.inputRms < .003, 'low input reproduces the previous silence gate regression');
           assert.ok(levels.inputGain > 8, 'low input receives enough gain');
         }
-        await page.waitForTimeout(12000);
-        assert.ok(await page.evaluate(() => window.beatThisTest().beatThisState.windowSeconds === 8 && !window.beatThisTest().beatThisStatus.includes('リズム判定を停止')), 'rolling inference reaches a full window without accumulating a capture backlog');
+        await page.waitForFunction(()=>{
+          const s=window.beatThisTest().beatThisState;
+          return s && s.windowSeconds===s.windowLimitSeconds && !window.beatThisTest().beatThisStatus.includes('リズム判定を停止');
+        },null,{timeout:60000});
+        assert.ok(await page.evaluate(() => window.beatThisTest().beatThisState.windowSeconds === window.beatThisTest().beatThisState.windowLimitSeconds && !window.beatThisTest().beatThisStatus.includes('リズム判定を停止')), 'rolling inference reaches a full context window without accumulating a capture backlog');
         if (meter === 4) await page.screenshot({ path: '/tmp/beat-this-browser.png' });
         assert.ok(!requested.some(url => url.includes('beatnet')));
         await page.click('#stop');

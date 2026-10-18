@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.23';
+  const VERSION = '2026.10.18.24';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -20,23 +20,28 @@
   let beatThisStorageStatus = window.ModelSetup?.complete ? '端末に保存済み・再読み込み後も再利用' : 'Beat This!の保存状態を確認中';
   let latestInputLevel = null;
   let aiActive = false, aiLastTick = -100, aiMotionScale = 1, aiMotionLimit = 1;
+  const beatClock = new window.BeatClock();
   const aiLabel = () => 'Beat This!';
   function resetBeatThis() {
     beatThisClient?.stop(); beatThisClient = null; beatThisState = null; latestInputLevel = null;
-    aiActive = false; aiLastTick = -100; aiMotionScale = aiMotionLimit = 1;
+    beatClock.reset(); aiActive = false; aiLastTick = -100; aiMotionScale = aiMotionLimit = 1;
     beatThisStatus = `開始すると${aiLabel()}を準備します`;
     if (running && !demo && audio && source) beginBeatThis();
   }
   function beginBeatThis() {
+    beatClock.reset();
     const Client = window.BeatThisClient;
     if (!Client) { beatThisStatus = `${aiLabel()}未対応・リズム判定を停止`; return; }
     const token = generation;
     const client = new Client(state => {
       if (token !== generation || client !== beatThisClient) return;
       beatThisState = state;
+      if(state) beatClock.observeModel(state,audio.currentTime);
+      else beatClock.reset();
     }, status => { if (token === generation && client === beatThisClient) beatThisStatus = status; }, storage => { if (token === generation && client === beatThisClient) beatThisStorageStatus = storage; }, level => {
       if (token !== generation || client !== beatThisClient) return;
       latestInputLevel=level;
+      if(level.drop && audio) beatClock.noticeDrop(audio.currentTime);
       if(inputGainNode && audio) {
         const param=inputGainNode.gain;
         param.cancelScheduledValues(audio.currentTime);
@@ -51,28 +56,26 @@
     });
   }
   function selectRhythmEngine(dt) {
-    const state = beatThisState, now = audio?.currentTime;
-    const period = state?.bpm ? 60 / state.bpm : .5;
-    const fresh = state && Number.isFinite(now) && now - state.audioTime < 12 && now >= state.audioTime - .1 &&
-      now - state.receivedAudioTime < 8;
-    const supported = fresh && state.time >= 2 && state.beatCount >= 6 && state.bpm >= 55 && state.bpm <= 200 &&
-      !state.quiet && (!latestInputLevel || basicRhythm.quiet < Math.max(.6,period*1.4)) && now - state.lastBeatAudioTime < 12;
-    aiActive = !!(!beatThisClient?.stopped && supported && state.confidence > (aiActive ? .3 : .55));
-    if (!aiActive) { rhythm = basicRhythm; return; }
-    const age = Math.max(0, now - state.lastBeatAudioTime), predicted = Math.floor(age / period), phase = age / period % 1;
-    const tick = state.lastBeatAudioTime + predicted * period;
-    const beat = tick - aiLastTick > period * .6;
-    if (beat) aiLastTick = tick;
-    const meter = state.meterConfidence > .6 ? state.meter : 0;
-    const beatInBar = meter ? ((state.beatInBar - 1 + predicted) % meter + meter) % meter + 1 : 0;
-    const tempoSpeed = clamp(Math.pow(state.bpm / 120, 1.2), .5, 1.65);
-    aiMotionScale = lerp(aiMotionScale, lerp(1, tempoSpeed, state.confidence), 1 - Math.exp(-dt / 1.2));
+    const state=beatThisState,now=audio?.currentTime;
+    if(basicRhythm.onset && Number.isFinite(now)) {
+      // Analyser output describes the centre of its recent FFT window.
+      beatClock.attack(now-(analyser?.fftSize || 4096)/(2*(audio?.sampleRate || 48000)));
+    }
+    const clock=beatThisClient && !beatThisClient.stopped && beatClock.project(now,basicRhythm.quiet);
+    aiActive=!!clock;
+    if(!clock) {rhythm=basicRhythm;return;}
+    const {period,phase,meter,beatInBar}=clock;
+    const tick=clock.lastBeatAudioTime;
+    const beat=tick-aiLastTick>period*.6;
+    if(beat) aiLastTick=tick;
+    const tempoSpeed = clamp(Math.pow(clock.bpm / 120, 1.2), .5, 1.65);
+    aiMotionScale = lerp(aiMotionScale, lerp(1, tempoSpeed, clock.confidence), 1 - Math.exp(-dt / 1.2));
     aiMotionLimit = lerp(aiMotionLimit, clamp(tempoSpeed, .45, 1.65), 1 - Math.exp(-dt / 2));
-    rhythm = { ...basicRhythm, engine: 'beat-this', bpm: state.bpm, period, confidence: state.confidence,
-      tracking: true, quiet: latestInputLevel?.quiet ? basicRhythm.quiet : 0, phase, pulse: Math.exp(-phase * 9), beat, beatCount: state.beatCount + predicted,
+    rhythm = { ...basicRhythm, engine: 'beat-this', bpm: clock.bpm, period, confidence: clock.confidence,
+      tracking: true, quiet: latestInputLevel?.quiet ? basicRhythm.quiet : 0, phase, pulse: Math.exp(-phase * 9), beat, beatCount: clock.beatCount,
       lastBeat: basicRhythm.time - phase * period, nextBeat: basicRhythm.time + (1 - phase) * period,
-      lastSupport: basicRhythm.time - age, evidence: Math.max(state.beatProbability, state.downProbability),
-      meter, meterConfidence: state.meterConfidence, beatInBar,
+      lastSupport: basicRhythm.time - Math.min(clock.modelAge,clock.attackAge), assisted: clock.assisted, evidence: Math.max(state.beatProbability, state.downProbability),
+      meter, meterConfidence: clock.meterConfidence, beatInBar,
       motionScale: aiMotionScale, motionLimitScale: aiMotionLimit };
   }
   const microphoneConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, sampleRate: 22050 };
@@ -593,8 +596,7 @@
     ctx.globalCompositeOperation = 'source-over';
   }
 
-  // Online beat tracking: spectral onsets vote for a tempo, then a gently
-  // corrected clock carries the beat between transients. No sound is stored.
+  // Acoustic transients support the Beat This clock; they never seed tempo or meter.
   const basicRhythm = { engine: 'basic', time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
     period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1, motionLimitScale: 1, lastReliableBpm: 0, lastReliableTime: -100,
     fluxAverage: 0, quiet: 0, onset: false, beat: false,
@@ -615,7 +617,7 @@
       meter: 0, meterConfidence: 0, beatInBar: 0, downbeatOffset: 0, accents: [] });
     rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = []; rhythm.featureHistory = [];
   }
-  // Visual transient/level envelope only. Rhythm comes exclusively from Beat This!.
+  // Transient/level envelope used to support the clock seeded by Beat This!.
   function updateRhythm(dt) {
     const r = basicRhythm;
     r.time += dt; r.onset = false; r.beat = false;
@@ -759,11 +761,11 @@
     set('comparison', aiFresh ? `入力RMS ${(ai.inputRms ?? 0).toExponential(2)} / 補正 ${(ai.inputGain ?? 0).toFixed(1)}倍 / 補正後 ${(ai.adjustedRms ?? 0).toFixed(3)}` : '—');
     set('input', !running ? '停止中' : `${demo ? 'デモ入力' : 'マイク入力'} · ${audible ? '解析中' : '無音／入力待ち'}`);
     set('tempo', locked ? `${r.bpm.toFixed(1)} BPM / ${(r.bpm / 60).toFixed(2)} BPS · 確かさ ${pct(r.confidence)}` : `— BPM / — BPS · ${audible ? '推定中' : '判定待ち'}`);
-    set('tracking', locked ? `${(r.engine !== 'basic' || r.evidence > .35) && r.time - r.lastSupport < Math.max(.75, r.period * 1.5) ? '追従中' : '履歴で継続'} · 最終支持 ${Math.max(0, r.time - r.lastSupport).toFixed(1)}秒前` : '推定待ち');
+    set('tracking', locked ? `${(r.engine !== 'basic' || r.evidence > .35) && r.time - r.lastSupport < Math.max(.75, r.period * 1.5) ? (r.assisted ? 'アタック補助で継続' : '追従中') : '履歴で継続'} · 最終支持 ${Math.max(0, r.time - r.lastSupport).toFixed(1)}秒前` : '推定待ち');
     set('meter-evidence', audible && r.engine !== 'basic' && ai ? `3拍 ${pct(ai.meterMass[1])} / 4拍 ${pct(ai.meterMass[2])}` : audible ? `3拍 ${pct(r.meterScores[0])} / 4拍 ${pct(r.meterScores[1])} · 候補差 ${pct(r.meterMargin)}` : '—');
     set('meter', meterKnown ? `${r.meter}拍子系 · 確かさ ${pct(r.meterConfidence)}` : `未確定 · 確かさ ${pct(audible ? r.meterConfidence : 0)}`);
     set('position', meterKnown ? Array.from({ length: r.meter }, (_, i) => `${i + 1 === r.beatInBar ? '●' : '○'}${i + 1}`).join('  ') : '—');
-    set('window', aiFresh ? `直近${ai.windowSeconds.toFixed(1)}秒／最短1秒ごと解析・両端0.5秒除外・現在拍は予測` : '2秒から開始・最大8秒');
+    set('window', aiFresh ? `直近${ai.windowSeconds.toFixed(1)}秒／約${(ai.hopSeconds ?? 2).toFixed(1)}秒ごと解析・両端0.5秒除外・現在拍は予測` : '2・4・6秒…最大16秒');
     const expression = `${m.warmth > .15 ? '明るめ' : m.warmth < -.15 ? '陰影あり' : '中間'}・${m.activity > .55 ? '活発' : m.activity < .3 ? '穏やか' : '中程度の動き'}`;
     set('mood', audible ? `${expression} · 活動 ${pct(m.activity)} / 緊張 ${pct(m.tension)} / 確かさ ${pct(m.confidence)}` : '—');
     set('timbre', audible ? `${m.brightness < .35 ? '低域寄り' : m.brightness > .65 ? '高域寄り' : '中域寄り'}・${m.flatness > .45 ? 'ノイズ的' : '倍音的'}（明るさ ${pct(m.brightness)} / 平坦度 ${pct(m.flatness)}）` : '—');

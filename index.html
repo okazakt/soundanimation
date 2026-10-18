@@ -8,12 +8,13 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.23">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.24">
   <title>Starlight Bell</title>
-  <script src="./model-setup.js?v=2026.10.18.23" defer></script>
-  <script src="./beat-this-audio.js?v=2026.10.18.23" defer></script>
-  <script src="./beat-this-client.js?v=2026.10.18.23" defer></script>
-  <script src="./app.js?v=2026.10.18.23" defer></script>
+  <script src="./model-setup.js?v=2026.10.18.24" defer></script>
+  <script src="./beat-this-audio.js?v=2026.10.18.24" defer></script>
+  <script src="./beat-clock.js?v=2026.10.18.24" defer></script>
+  <script src="./beat-this-client.js?v=2026.10.18.24" defer></script>
+  <script src="./app.js?v=2026.10.18.24" defer></script>
 </head>
 <body>
   <section id="model-setup" aria-labelledby="setup-title" aria-busy="true">
@@ -50,11 +51,11 @@
           <dt>拍子</dt><dd id="debug-meter">判定待ち</dd>
           <dt>拍子の材料</dt><dd id="debug-meter-evidence">—</dd>
           <dt>小節内の拍</dt><dd id="debug-position">—</dd>
-          <dt>参照範囲</dt><dd id="debug-window">2秒から開始・最大8秒</dd>
+          <dt>参照範囲</dt><dd id="debug-window">2・4・6秒…最大16秒</dd>
           <dt>音楽の表情</dt><dd id="debug-mood">—</dd>
           <dt>音色の特徴</dt><dd id="debug-timbre">—</dd>
         </dl>
-        <p class="debug-note">Beat This!のみで拍・BPM・3/4拍子系を推定します。初回2秒から最大8秒へ文脈を広げ、現在拍は予測します。音色は音響特徴で、楽器名の識別ではありません。</p>
+        <p class="debug-note">Beat This!のみで拍・BPM・3/4拍子系を推定します。2・4・6秒と最大16秒へ文脈を広げ、遅延を補って現在拍を予測します。アタック音はAIで確立した拍の補助に使います。音色は音響特徴で、楽器名の識別ではありません。</p>
       </div>
     </details>
     <div id="intro"><p class="eyebrow">STARLIGHT BELL</p><h1 id="intro-title">音を、光の動きに。</h1><p>下の「開始」を押して<br>音の流れを眺める</p></div>

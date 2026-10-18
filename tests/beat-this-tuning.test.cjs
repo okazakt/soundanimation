@@ -20,7 +20,7 @@ for(const meter of [3,4]) test(`phase voting locks ${meter} across sliding windo
   const before=s.beatInBar;
   s=t.summarize(probabilities(11,8,meter,36),11,8);
   assert.equal(s.meter,meter);assert.equal(s.beatInBar,(before+1)%meter+1);
-  assert.ok(t.frames.size<=801);
+  assert.ok(t.frames.size<=1601);
 });
 test('sum head keeps a downbeat with weak beat output, crops both edges, NMS rejects close noise',()=>{
   const r=probabilities(100,8,4,204);r.beatConfidence[200]=.8;r.beatConfidence[201]=.99;
@@ -92,4 +92,29 @@ test('coherent weaker neural peaks survive while low model evidence and irregula
   const irregular={beatConfidence:new Float32Array(401),downbeatConfidence:new Float32Array(401)};
   for(const t of [1,1.32,2.2,2.9,4,4.4,5.4,5.72,6.6]) irregular.beatConfidence[Math.round(t*50)]=.9;
   assert.ok(new Tracker().summarize(irregular,0,8).confidence<.55);
+});
+test('32-beat meter history retains a supported slow meter even when its phase anchor is over 20 seconds old',()=>{
+  const t=new Tracker();let s;
+  for(let end=16;end<=60;end+=2) {
+    const start=end-16,bp=new Float32Array(801),dp=new Float32Array(801);
+    for(let i=0;i<801;i++) {
+      const time=start+i/50,beat=Math.round(time-.2);
+      if(Math.abs(time-(beat+.2))<.005) {bp[i]=.9;dp[i]=beat%4===0?.95:.05;}
+    }
+    s=t.summarize({beatConfidence:bp,downbeatConfidence:dp},start,16);
+  }
+  assert.equal(s.bpm,60);assert.equal(s.meter,4);assert.ok(s.beatCount>=24);assert.ok(t.frames.size<=1601);
+  assert.ok(60-t.lock.anchor>20);assert.equal(t.lock.updatedAt,60);
+});
+test('an exponentially dying filter tail is not periodically re-amplified as a new quiet scene',()=>{
+  const level=new AutoLevel();let state;
+  const block=amplitude=>Float32Array.from({length:2048},(_,i)=>amplitude*Math.sin(i*.1));
+  level.observe(block(.1),44100);
+  for(let step=1;step<=12;step++) {
+    state=level.observe(block(.1*Math.exp(-step*4)),44100);
+    assert.equal(state.drop,false);
+    if(step>=2) assert.equal(state.quiet,true);
+  }
+  for(let step=0;step<10;step++) state=level.observe(block(.000001),44100);
+  assert.equal(state.quiet,false,'stable real low input can still be reacquired after silence');
 });

@@ -51,20 +51,25 @@
   // constant gain over its whole context so it cannot flatten musical accents.
   class AutoLevel {
     constructor() { this.reset(); }
-    reset() { this.reference=0; this.lowFor=0; }
+    reset() { this.reference=0; this.lowFor=0; this.previousRms=0; }
     observe(pcm,rate) {
       const {rms,peak}=measure(pcm),dt=pcm.length/rate;
+      let drop=false;
+      // A filter's rapidly dying tail is not a newly quiet scene. Re-amplifying
+      // it every 300 ms would briefly turn digital silence back into activity.
+      const decaying=this.previousRms>0 && rms<this.previousRms*.25;
+      this.previousRms=rms;
       if(rms>0) {
-        if(!this.reference || rms>this.reference) this.reference=rms;
+        if(!this.reference || rms>this.reference) {this.reference=rms;this.lowFor=0;}
         else {
           this.lowFor=rms<this.reference*.1 ? this.lowFor+dt : 0;
-          this.reference=this.lowFor>.3 ? rms : rms+(this.reference-rms)*Math.exp(-dt/1.2);
-          if(this.lowFor>.3) this.lowFor=0;
+          this.reference=this.lowFor>.3 && !decaying ? rms : rms+(this.reference-rms)*Math.exp(-dt/1.2);
+          if(this.lowFor>.3 && !decaying) {this.lowFor=0;drop=true;}
         }
       }
       const gain=peak>0 ? Math.min(TARGET_RMS/this.reference,.95/peak) : 0;
       const adjustedRms=rms*gain;
-      return {rms,gain,adjustedRms,quiet:adjustedRms<ADJUSTED_SILENCE};
+      return {rms,gain,adjustedRms,drop,quiet:adjustedRms<ADJUSTED_SILENCE};
     }
   }
   const api = { Resampler, normalize, AutoLevel };

@@ -1,12 +1,13 @@
 // MIT-licensed Beat This! browser port. See vendor/beat-this/NOTICE.md.
 import { createBeatThis } from './vendor/beat-this/beat-this-cpu.mjs';
-import './beat-this-audio.js?v=2026.10.18.23';
-import './beat-this-rhythm.js?v=2026.10.18.23';
-import './model-assets.js?v=2026.10.18.23';
-const RATE = 22050, CAPACITY = RATE * 8;
+import './beat-this-audio.js?v=2026.10.18.24';
+import './beat-this-rhythm.js?v=2026.10.18.24';
+import './model-assets.js?v=2026.10.18.24';
+const RATE = 22050, CAPACITY = RATE * 16;
 let tracker, resampler, ring = new Float32Array(CAPACITY), written = 0, total = 0;
 let inputRate = RATE, inputSamples = 0, expectedInputTime = null, timeline = 0, resyncCount = 0;
 let end = 0, lastRun = 0, busy = false, scheduledTimer = null, provider = 'wasm';
+let windowLimitSeconds=16, hopSeconds=2;
 const rhythmTracker = new self.BeatThisRhythm.Tracker();
 const status = message => self.postMessage({ type: 'status', message });
 async function load(rate) {
@@ -44,8 +45,9 @@ async function analyze() {
   busy = true; lastRun = end;
   scheduledTimer = null;
   const epoch = timeline;
-  const length = Math.min(total, CAPACITY), pcm = new Float32Array(length);
-  const begin = total >= CAPACITY ? written : 0, first = Math.min(length, CAPACITY - begin);
+  const windowSeconds=Math.min(windowLimitSeconds,Math.max(2,Math.floor(total/RATE/2)*2));
+  const length = RATE*windowSeconds, pcm = new Float32Array(length);
+  const begin = (written-length+CAPACITY)%CAPACITY, first = Math.min(length, CAPACITY - begin);
   pcm.set(ring.subarray(begin, begin + first)); if (first < length) pcm.set(ring.subarray(0, length - first), first);
   const audioTime = end, started = performance.now();
   try {
@@ -53,9 +55,14 @@ async function analyze() {
     const result = levels.quiet ? { beatConfidence: [], downbeatConfidence: [] } : await tracker.analyze(pcm);
     const processingMs = performance.now() - started;
     if (epoch !== timeline) return; // A discontinuity invalidates in-flight predictions.
-    if (processingMs > 10000) throw new Error('解析に10秒以上かかるため、この端末ではライブ推定を継続できません');
+    hopSeconds=Math.max(2,Math.min(8,processingMs/1000*1.25));
+    if(processingMs>6000 && windowSeconds>8) {
+      windowLimitSeconds=Math.max(8,windowSeconds-4);
+      status(`端末の負荷に合わせて解析窓を最大${windowLimitSeconds}秒へ調整`);
+      if(processingMs>10000) return; // Retry a smaller fresh window, not an old result.
+    } else if(processingMs>10000) throw new Error('解析に10秒以上かかるため、この端末ではライブ推定を継続できません');
     const state = rhythmTracker.summarize(result, audioTime - length / RATE, length / RATE, levels.quiet);
-    self.postMessage({ type: 'result', state: { ...state, inputRms: levels.rms, inputGain: levels.gain, adjustedRms: levels.adjustedRms, processingMs, provider, resyncCount, inputRate } });
+    self.postMessage({ type: 'result', state: { ...state, inputRms: levels.rms, inputGain: levels.gain, adjustedRms: levels.adjustedRms, processingMs, windowLimitSeconds, hopSeconds, provider, resyncCount, inputRate } });
   } finally { busy = false; }
 }
 self.onmessage = async ({ data }) => {
@@ -84,7 +91,7 @@ self.onmessage = async ({ data }) => {
       // newest capture timestamp rather than accumulating clock differences.
       end = expectedInputTime - (inputSamples / inputRate - total / RATE);
       self.postMessage({ type: 'ack' });
-      if (!busy && total >= RATE * 2 && end - lastRun >= 1) {
+      if (!busy && total >= RATE * 2 && end - lastRun >= hopSeconds) {
         // Let queued capture messages drain before taking the newest window.
         // Otherwise CPU inference slower than the hop would repeatedly analyze old
         // snapshots and build an ever-growing lag despite a bounded ring.

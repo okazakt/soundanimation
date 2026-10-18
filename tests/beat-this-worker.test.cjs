@@ -5,12 +5,12 @@ const vm = require('node:vm');
 const { summarize, Tracker } = require('../beat-this-rhythm.js');
 const core = require('../beat-this-audio.js');
 const empty = () => ({ beats: [], downbeats: [], beatConfidence: [], downbeatConfidence: [] });
-function fixture(analyze) {
+function fixture(analyze,timing={now:0}) {
   const timers = new Map(), messages = [], windows = []; let next = 0;
   const self = { location: { href: 'https://example.test/app/beat-this-worker.js' }, BeatThisAudio: core, BeatThisRhythm: { Tracker }, ModelAssets: require('../model-assets.js'), BeatThisRhythm: { summarize, Tracker }, postMessage: m => messages.push(m) };
   const fakeTracker = { async analyze(pcm) { windows.push(pcm); return analyze ? analyze(pcm) : empty(); } };
   const code = fs.readFileSync(require.resolve('../beat-this-worker.js'), 'utf8').replace(/^import .*;$/gm, '') + '\ntracker = fakeTracker; resampler = new self.BeatThisAudio.Resampler(inputRate);';
-  vm.runInNewContext(code, { self, fakeTracker, Float32Array, URL, performance: { now: () => 0 }, setTimeout: fn => { timers.set(++next, fn); return next; }, clearTimeout: id => timers.delete(id) });
+  vm.runInNewContext(code, { self, fakeTracker, Float32Array, URL, performance: { now: () => timing.now }, setTimeout: fn => { timers.set(++next, fn); return next; }, clearTimeout: id => timers.delete(id) });
   return { timers, messages, windows, async send(audioTime, pcm, extra = {}) { await self.onmessage({ data: { type: 'pcm', audioTime, pcm, ...extra } }); },
     async feed(start, seconds, rate = 22050, skew = 0) {
       const length = Math.round(seconds * rate); let count = 0, block = 0;
@@ -20,10 +20,10 @@ function fixture(analyze) {
 test('worker drains queued capture before inference and keeps only the latest bounded window', async () => {
   const f = fixture(); await f.feed(100, 21);
   assert.equal(f.timers.size, 1); assert.equal(f.windows.length, 0); await f.run();
-  assert.equal(f.windows.length, 1); assert.equal(f.windows[0].length, 8 * 22050);
+  assert.equal(f.windows.length, 1); assert.equal(f.windows[0].length, 16 * 22050);
   assert.ok(f.windows[0].every(Number.isFinite)); assert.ok(Math.abs(f.windows[0].at(-1)) <= .951);
   const state = f.messages.find(m => m.type === 'result').state;
-  assert.equal(state.audioTime, 121); assert.equal(state.windowSeconds, 8);
+  assert.equal(state.audioTime, 121); assert.equal(state.windowSeconds, 16);
   assert.ok(!f.messages.some(m => m.type === 'error'));
   await f.send(121, Float32Array.of(NaN)); assert.match(f.messages.at(-1).message, /不正/);
 });
@@ -82,15 +82,14 @@ test('model initialization passes verified bytes directly to CPU runtime without
   assert.deepEqual(calls, ['https://example.test/app/vendor/beat-this/small.onnx']);
   assert.equal(messages.at(-1).type, 'ready'); assert.equal(messages.at(-1).provider, 'wasm');
 });
-test('warmup begins at two seconds, expands to eight, and waits one second between starts', async () => {
-  const f = fixture();
-  await f.feed(0, 1); assert.equal(f.timers.size, 0);
-  await f.feed(1, 1); assert.equal(f.timers.size, 1); await f.run();
-  assert.equal(f.windows[0].length, 2*22050);
-  await f.feed(2, .5); assert.equal(f.timers.size, 0);
-  await f.feed(2.5, .5); assert.equal(f.timers.size, 1); await f.run();
-  assert.equal(f.windows[1].length, 3*22050);
-  await f.feed(3, 6); await f.run(); assert.equal(f.windows[2].length, 8*22050);
+test('warmup infers at 2, 4, 6 ... 16 seconds without waiting for the full window', async () => {
+  const f=fixture();await f.feed(0,1);assert.equal(f.timers.size,0);
+  for(let end=2;end<=18;end+=2) {
+    await f.feed(end===2?1:end-2,end===2?1:2);
+    assert.equal(f.timers.size,1);await f.run();
+    assert.equal(f.windows.at(-1).length,Math.min(16,end)*22050);
+    assert.equal(f.messages.filter(m=>m.type==='result').at(-1).state.audioTime,end);
+  }
 });
 test('quiet microphone windows skip model inference and clear confidence', async () => {
   const f = fixture();
@@ -107,4 +106,20 @@ test('reported iPhone music level RMS .001 is normalized and sent to the model i
   const state=f.messages.find(m=>m.type==='result').state;
   assert.ok(Math.abs(state.inputRms-.001)<1e-6);assert.ok(state.inputGain>90);
   assert.equal(state.quiet,0);
+});
+
+test('slow long-context inference reduces context and hop instead of repeatedly overloading the device',async()=>{
+  const timing={now:0};const f=fixture(()=>{timing.now+=7000;return empty();},timing);
+  await f.feed(0,16);await f.run();
+  let s=f.messages.filter(m=>m.type==='result').at(-1).state;
+  assert.equal(s.windowSeconds,16);assert.equal(s.windowLimitSeconds,12);assert.equal(s.hopSeconds,8);
+  await f.feed(16,8);await f.run();s=f.messages.filter(m=>m.type==='result').at(-1).state;
+  assert.equal(s.windowSeconds,12);assert.equal(s.windowLimitSeconds,8);
+  assert.ok(!f.messages.some(m=>m.type==='error'));
+});
+test('an excessively old long-window result is discarded while a smaller fresh retry remains possible',async()=>{
+  const timing={now:0};const f=fixture(()=>{timing.now+=11000;return empty();},timing);
+  await f.feed(0,16);await f.run();
+  assert.equal(f.messages.filter(m=>m.type==='result').length,0);
+  assert.ok(!f.messages.some(m=>m.type==='error'));
 });

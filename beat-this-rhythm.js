@@ -13,7 +13,7 @@
       if (!quiet) for (let i = 25; i < Math.min(bp.length, dp.length) && i / 50 <= duration - .5; i++) {
         this.frames.set(Math.round(start * 50) + i, [Math.max(bp[i], dp[i]), dp[i]]);
       }
-      for (const k of this.frames.keys()) if (k / 50 < end - 16) this.frames.delete(k);
+      for (const k of this.frames.keys()) if (k / 50 < end - 32) this.frames.delete(k);
       const frames = [...this.frames].sort((a,b) => a[0]-b[0]);
       // Model probabilities on distant microphone music are weaker than clean
       // recordings. Use their own background level, not a fixed 50% cutoff.
@@ -28,8 +28,8 @@
       for (const peak of peaks.sort((a,b) => b[1][0]-a[1][0])) {
         if (selected.every(p => Math.abs(p[0]-peak[0]) >= 15)) selected.push(peak);
       }
-      const beats = selected.sort((a,b) => a[0]-b[0]).slice(-16);
-      const intervals = beats.slice(1).map((b,i) => (b[0]-beats[i][0])/50);
+      const beats = selected.sort((a,b) => a[0]-b[0]).slice(-32);
+      const intervals = beats.slice(1).map((b,i) => (b[0]-beats[i][0])/50).slice(-16);
       const period = median(intervals), bpm = period ? 60/period : 0;
       const confidence = intervals.length ? modelStrength * intervals.filter(t => Math.abs(t-period) < period*.16).length / intervals.length * Math.min(1,intervals.length/8) : 0;
       const hypotheses = [];
@@ -42,21 +42,21 @@
       }
       hypotheses.sort((a,b) => (b.score+b.contrast)-(a.score+a.contrast));
       const best = hypotheses[0];
-      const eligible = best && best.score >= .5 && best.contrast >= .15 && confidence >= .55;
+      const eligible = best && best.score >= .5 && best.contrast >= .15 && confidence >= .55 && end-(beats.at(-1)?.[0] ?? -Infinity)/50 < Math.max(2,period*2);
       if (eligible && end > this.lastEnd + .1) {
         const samePhase = this.lock && this.lock.meter === best.meter &&
           Math.abs((best.anchor-this.lock.anchor)/period - Math.round((best.anchor-this.lock.anchor)/period/best.meter)*best.meter) < .3;
-        if (samePhase) { this.lock = {...best, confidence:Math.min(1,best.score)}; this.votes=0; this.pending=null; }
+        if (samePhase) { this.lock = {...best, confidence:Math.min(1,best.score),updatedAt:end}; this.votes=0; this.pending=null; }
         else {
           // Candidate identity uses an absolute bar phase, stable as the window slides.
           const sameCandidate = this.pending && this.pending.meter === best.meter &&
             Math.abs((best.anchor-this.pending.anchor)/period - Math.round((best.anchor-this.pending.anchor)/period/best.meter)*best.meter) < .3;
           this.votes = sameCandidate ? this.votes+1 : 1; this.pending=best;
-          if (this.votes >= 3) { this.lock={...best,confidence:best.score}; this.votes=0; }
+          if (this.votes >= 3) { this.lock={...best,confidence:best.score,updatedAt:end}; this.votes=0; }
         }
       } else if (!eligible) { this.votes=0; this.pending=null; }
       this.lastEnd=end;
-      if (this.lock && (!beats.length || end-this.lock.anchor > 20)) this.lock=null;
+      if (this.lock && (!beats.length || end-this.lock.updatedAt > 20)) this.lock=null;
       const last = beats.at(-1), lastTime = last ? last[0]/50 : -100;
       const meter = this.lock?.meter || 0;
       const index = meter && period ? Math.round((lastTime-this.lock.anchor)/period) : 0;

@@ -39,7 +39,7 @@ function fixture(getMicrophone, options = {}) {
     assert.equal(constraints.audio.noiseSuppression, false);
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
-  const window = { BeatThisClient: options.beatThisClient, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: options.dpr || 2, addEventListener(type, fn) { events[type] = fn; } };
+  const window = { BeatClock: require('../beat-clock.js').BeatClock, BeatThisClient: options.beatThisClient, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: options.dpr || 2, addEventListener(type, fn) { events[type] = fn; } };
   // Reproducible visual variation keeps coverage independent of session RNG.
   let randomState = options.randomSeed ?? 0x12345678;
   const deterministicMath = Object.create(Math);
@@ -176,7 +176,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.23'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.24'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -810,7 +810,7 @@ test('Beat This uses delayed estimates between updates, then expires them and ca
   assert.equal(f.inspect().rhythm.meter, 3);
   f.inspect().audio.currentTime = 23; f.inspect().basicRhythm.quiet = 0;
   await f.tick(); assert.equal(f.inspect().rhythm.engine, 'beat-this', 'must bridge normal multi-second inference intervals');
-  f.inspect().audio.currentTime = 29; await f.tick();
+  f.inspect().audio.currentTime = 31; await f.tick();
   assert.equal(f.inspect().rhythm.engine, 'basic', 'stale estimates expire even if audio remains audible');
   f.nodes['#next-mode'].click();
   assert.ok(clients[0].stopped); clients[0].emit({ bpm: 200 });

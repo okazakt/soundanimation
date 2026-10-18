@@ -53,7 +53,7 @@
       this.context = context; this.source = source; this.inputLevel = new window.BeatThisAudio.AutoLevel();
       if (typeof navigator !== 'undefined' && navigator.serviceWorker) await this.prepareStorage(navigator.serviceWorker);
       if (this.stopped) return;
-      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.23', document.baseURI), { type: 'module' });
+      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.18.24', document.baseURI), { type: 'module' });
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => this.fail('モデル準備がタイムアウトしました（通信・空きメモリを確認）'), 180000);
         this.readyReject = error => { clearTimeout(timer); reject(error); };
@@ -73,13 +73,13 @@
             const age = context.currentTime - data.state.audioTime;
             if (age > 10) { this.fail('処理が入力に追いつきません'); return; }
             this.onState({ ...data.state, receivedAudioTime: context.currentTime });
-            this.onStatus(`${data.state.quiet ? '入力がほぼ無音・解析待ち' : '解析中'} · ${this.provider === 'webgpu' ? 'GPU' : 'CPU'} · 直近${data.state.windowSeconds.toFixed(0)}秒／最短1秒ごと更新${data.state.resyncCount ? ` · 再同期${data.state.resyncCount}回` : ''}`);
+            this.onStatus(`${data.state.quiet ? '入力がほぼ無音・解析待ち' : '解析中'} · ${this.provider === 'webgpu' ? 'GPU' : 'CPU'} · 直近${data.state.windowSeconds.toFixed(0)}秒／約${(data.state.hopSeconds ?? 2).toFixed(1)}秒ごと更新${data.state.windowLimitSeconds < 16 ? ` · 負荷調整:最大${data.state.windowLimitSeconds}秒` : ''}${data.state.resyncCount ? ` · 再同期${data.state.resyncCount}回` : ''}`);
           }
         };
         worker.postMessage({ type: 'load', rate: context.sampleRate });
       });
       if (this.stopped) return;
-      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.18.23', document.baseURI));
+      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.18.24', document.baseURI));
       if (this.stopped) return;
       this.node = new AudioWorkletNode(context, 'beat-this-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       this.node.port.onmessage = ({ data }) => {
@@ -96,7 +96,7 @@
       this.highpass = context.createBiquadFilter(); this.highpass.type = 'highpass'; this.highpass.frequency.value = 30;
       this.lowpass = context.createBiquadFilter(); this.lowpass.type = 'lowpass'; this.lowpass.frequency.value = Math.min(12000, context.sampleRate * .45);
       source.connect(this.highpass); this.highpass.connect(this.lowpass); this.lowpass.connect(this.node); this.node.connect(this.mute); this.mute.connect(context.destination);
-      this.onStatus('音を収集中 · 最初の解析は2秒後（直近最大8秒を参照）');
+      this.onStatus('音を収集中 · 最初の解析は2秒後（2・4・6秒…最大16秒へ拡張）');
     }
     fail(message) { if (this.stopped) return; this.onState(null); this.onStatus(`${message}・リズム判定を停止`); this.readyReject?.(new Error(message)); this.stop(); }
     stop() {
