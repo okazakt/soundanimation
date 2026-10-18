@@ -39,5 +39,5 @@ Rebuild browser bundle from the pinned browser-port checkout:
 Copy the matching ort-wasm-simd-threaded.asyncify.mjs/.wasm from
 node_modules/onnxruntime-web/dist/ alongside the bundle. These assets are served
 locally and fetched only after selecting Beat This! and starting the microphone.
-They are intentionally excluded from the app's automatic service-worker cache.
+They are cached on first selected use in a separate, cache-first service-worker cache. The cache is retained across app-shell upgrades; unchanged assets are reused on reload and offline. Cache availability is shown in the debug UI. Source-clock interruptions reset capture history and phase automatically without reloading model weights.
 Microphone audio is kept briefly in RAM only and is not uploaded or persisted.

@@ -1,25 +1,51 @@
 'use strict';
 // All cache operations and requests stay within this application's directory.
 const PREFIX = 'starlight-bell-soundanimation-';
-const CACHE = PREFIX + 'v2026.10.18.17';
+const CACHE = PREFIX + 'v2026.10.18.18';
 const BASE = new URL('./', self.location.href);
+// Immutable AI assets live independently of shell versions. Bump this key if
+// the model, bundled port or ORT files change; app updates must keep this cache.
+const MODEL_CACHE = PREFIX + 'beat-this-final0-ort-1.23.2-v1';
+const MODEL_ASSETS = [
+  './vendor/beat-this/beat-this.onnx', './vendor/beat-this/beat-this.mjs',
+  './vendor/beat-this/ort-wasm-simd-threaded.asyncify.mjs',
+  './vendor/beat-this/ort-wasm-simd-threaded.asyncify.wasm'
+].map(path => new URL(path, BASE).href);
 const ASSETS = [
-  './', './index.html', './style.css?v=2026.10.18.17', './app.js?v=2026.10.18.17',
-  './beatnet-client.js?v=2026.10.18.17', './beatnet-worker.js?v=2026.10.18.17',
-  './beatnet-core.js?v=2026.10.18.17', './beatnet-capture.js?v=2026.10.18.17',
+  './', './index.html', './style.css?v=2026.10.18.18', './app.js?v=2026.10.18.18',
+  './beatnet-client.js?v=2026.10.18.18', './beatnet-worker.js?v=2026.10.18.18',
+  './beatnet-core.js?v=2026.10.18.18', './beatnet-capture.js?v=2026.10.18.18',
   './vendor/beatnet/model-1.f32', './vendor/beatnet/manifest.json', './vendor/beatnet/frontend.json',
   './vendor/beatnet/LICENSE.txt', './vendor/beatnet/NOTICE.md', './vendor/beatnet/MADMOM-LICENSE.txt',
-  './beat-this-client.js?v=2026.10.18.17', './beat-this-worker.js?v=2026.10.18.17', './beat-this-rhythm.js?v=2026.10.18.17',
+  './beat-this-client.js?v=2026.10.18.18', './beat-this-worker.js?v=2026.10.18.18', './beat-this-rhythm.js?v=2026.10.18.18',
   './licenses.html', './manifest.json', './icons/192x192.png', './icons/512x512.png'
 ].map(path => new URL(path, BASE).href);
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(names => Promise.all(names.filter(name => name.startsWith(PREFIX) && name !== CACHE).map(name => caches.delete(name)))));
+  event.waitUntil(caches.keys().then(names => Promise.all(names.filter(name => name.startsWith(PREFIX) && name !== CACHE && name !== MODEL_CACHE).map(name => caches.delete(name)))).then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
+  if (event.request.method === 'GET' && MODEL_ASSETS.includes(url.href)) {
+    event.respondWith((async () => {
+      let cache;
+      try {
+        cache = await caches.open(MODEL_CACHE);
+        const saved = await cache.match(event.request);
+        if (saved && event.request.cache !== 'reload') return saved;
+      } catch { /* Storage may be disabled; live analysis can still run. */ }
+      const response = await fetch(event.request);
+      // Wait for persistence before completing a first load. Never save failed
+      // or partial responses, and don't break analysis on quota/storage errors.
+      if (cache && response.status === 200) {
+        try { await cache.put(event.request, response.clone()); } catch {}
+      }
+      return response;
+    })());
+    return;
+  }
   if (event.request.method !== 'GET' || url.origin !== BASE.origin || !url.pathname.startsWith(BASE.pathname) || !ASSETS.includes(url.href)) return;
   event.respondWith(fetch(event.request).then(response => {
     if (response.ok) {

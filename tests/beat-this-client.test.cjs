@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-function clientFixture(autoReady = true) {
-  const workers = [], nodes = [], states = [], statuses = [];
+function clientFixture(autoReady = true, options = {}) {
+  const workers = [], nodes = [], states = [], statuses = [], storage = [];
   let clock = 0;
   class Worker {
     constructor() { this.messages = []; workers.push(this); }
@@ -23,11 +23,11 @@ function clientFixture(autoReady = true) {
   const window = { Worker, AudioWorkletNode };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../beat-this-client.js'), 'utf8'), {
     window, Worker, AudioWorkletNode, document: { baseURI: 'https://example.test/soundanimation/' }, URL,
-    setTimeout, clearTimeout, performance: { now: () => clock++ }
+    setTimeout, clearTimeout, performance: { now: () => clock++ }, ...options
   });
-  const client = new window.BeatThisClient(state => states.push(state), status => statuses.push(status));
-  return { client, context, source, workers, nodes, states, statuses,
-    capture() { nodes[0].port.onmessage({ data: { pcm: new Float32Array(2048), firstFrame: 0 } }); } };
+  const client = new window.BeatThisClient(state => states.push(state), status => statuses.push(status), value => storage.push(value));
+  return { client, context, source, workers, nodes, states, statuses, storage,
+    capture(data = { pcm: new Float32Array(2048), firstFrame: 0 }) { nodes[0].port.onmessage({ data }); } };
 }
 test('Beat This cancellation during large-model load cannot start capture later', async () => {
   const f = clientFixture(false), pending = f.client.start(f.context, f.source);
@@ -58,4 +58,50 @@ test('cancellation while registering the shared capture worklet cannot reconnect
   const pending = f.client.start(f.context, f.source);
   await new Promise(done => setImmediate(done)); f.client.stop(); resolve(); await pending;
   assert.equal(f.nodes.length, 0); assert.equal(f.source.connections.size, 0);
+});
+test('source clock/rate metadata override the context estimate; resync clears state without destroying inference', async () => {
+  const f = clientFixture(); await f.client.start(f.context, f.source);
+  f.capture({ pcm: new Float32Array(2048), firstFrame: 999, audioTime: 10, sampleRate: 44100, discontinuity: true });
+  const sent = f.workers[0].messages.at(-1);
+  assert.equal(sent.audioTime, 10); assert.equal(sent.rate, 44100); assert.equal(sent.discontinuity, true);
+  f.workers[0].emit({ type: 'resync', gapMs: 200, rate: 44100 });
+  assert.equal(f.states.at(-1), null); assert.match(f.statuses.at(-1), /自動再同期/);
+  assert.ok(!f.client.stopped && !f.workers[0].terminated); f.client.stop();
+});
+test('model readiness verifies all four persisted files and reports saved or unavailable storage', async () => {
+  for (const saved of [true, false]) {
+    const f = clientFixture(true, { caches: { async open(name) { assert.match(name, /beat-this-final0-ort-1.23.2-v1$/); return { async match() { return saved ? { status: 200 } : undefined; } }; } } });
+    await f.client.start(f.context, f.source); await new Promise(resolve => setImmediate(resolve));
+    assert.match(f.storage.at(-1), saved ? /保存済み/ : /保存未完了/); f.client.stop();
+  }
+});
+test('stop while waiting for the first service-worker controller prevents a late model download', async () => {
+  const events = {};
+  const serviceWorker = { controller: null, ready: new Promise(() => {}),
+    addEventListener: (type, fn) => events[type] = fn, removeEventListener: type => delete events[type] };
+  const f = clientFixture(true, { navigator: { serviceWorker } });
+  const pending = f.client.start(f.context, f.source); f.client.stop(); await pending;
+  assert.equal(f.workers.length, 0); assert.equal(events.controllerchange, undefined);
+});
+test('an app update waits for its cache-capable controller before downloading the model', async () => {
+  const events = {}, old = {}, fresh = {};
+  const serviceWorker = { controller: old, ready: Promise.resolve(),
+    async register() { return { installing: fresh }; },
+    addEventListener: (type, fn) => events[type] = fn, removeEventListener: type => delete events[type] };
+  const f = clientFixture(true, { navigator: { serviceWorker } });
+  const pending = f.client.start(f.context, f.source); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.workers.length, 0);
+  serviceWorker.controller = fresh; events.controllerchange(); await pending;
+  assert.equal(f.workers.length, 1); f.client.stop();
+});
+test('offline cached startup does not wait on an unreachable service-worker registration', async () => {
+  const serviceWorker = { controller: {}, register() { assert.fail('offline startup must not register'); } };
+  const f = clientFixture(true, { navigator: { onLine: false, serviceWorker } });
+  await f.client.start(f.context, f.source); assert.equal(f.workers.length, 1); f.client.stop();
+});
+test('stop cancels even an unresolved online service-worker registration before any worker starts', async () => {
+  const serviceWorker = { controller: {}, register: () => new Promise(() => {}) };
+  const f = clientFixture(true, { navigator: { serviceWorker } });
+  const pending = f.client.start(f.context, f.source); f.client.stop(); await pending;
+  assert.equal(f.workers.length, 0);
 });

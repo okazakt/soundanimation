@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.17';
+  const VERSION = '2026.10.18.18';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -15,6 +15,7 @@
   const microphonePrompt = document.querySelector('#microphone-prompt');
   const engineSelect = document.querySelector('#analysis-engine');
   let beatNetClient = null, beatNetState = null, beatNetStatus = '開始するとBeatNetを準備します';
+  let beatThisStorageStatus = 'Beat This!は初回利用時に端末へ保存';
   let aiActive = false, aiLastTick = -100, aiMotionScale = 1, aiMotionLimit = 1;
   const isBeatThis = () => engineSelect.value === 'beat-this';
   const aiLabel = () => isBeatThis() ? 'Beat This!' : 'BeatNet';
@@ -36,7 +37,7 @@
       if (!state) return;
       if (isBeatThis()) return;
       beatNetStatus = state.time > 2 && state.beatCount >= 6 && state.confidence > .55 ? '解析中' : '解析中・拍の学習待ち';
-    }, status => { if (token === generation && client === beatNetClient) beatNetStatus = status; });
+    }, status => { if (token === generation && client === beatNetClient) beatNetStatus = status; }, storage => { if (token === generation && client === beatNetClient) beatThisStorageStatus = storage; });
     beatNetClient = client;
     client.start(audio, source).catch(error => {
       if (token !== generation || client !== beatNetClient) return;
@@ -1029,7 +1030,7 @@
     m.confidence = lerp(clamp(mean * 12, .2, 1), m.confidence, Math.exp(-dt / 4));
   }
   const debugPanel = document.querySelector('#audio-debug');
-  const debugFields = Object.fromEntries(['input', 'engine', 'ai', 'comparison', 'tempo', 'tracking', 'beat', 'onset', 'meter', 'meter-evidence', 'position', 'window', 'mood', 'timbre']
+  const debugFields = Object.fromEntries(['input', 'engine', 'model-storage', 'ai', 'comparison', 'tempo', 'tracking', 'beat', 'onset', 'meter', 'meter-evidence', 'position', 'window', 'mood', 'timbre']
     .map(key => [key, document.querySelector(`#debug-${key}`)]));
   let debugLastTime = -Infinity;
   function updateDebug(force = false) {
@@ -1049,6 +1050,7 @@
     const pct = value => `${Math.round(clamp(value, 0, 1) * 100)}%`;
     const set = (key, text) => { if (debugFields[key].textContent !== text) debugFields[key].textContent = text; };
     set('engine', wantsBeatNet() ? `${aiLabel()}（試験） · ${beatNetStatus}${running && r.engine === 'basic' ? '／従来方式で表示' : ''}` : '従来方式');
+    set('model-storage', beatThisStorageStatus);
     const ai = beatNetState;
     const aiFresh = ai && audio && audio.currentTime - ai.audioTime < (isBeatThis() ? 12 : .75) && !beatNetClient?.stopped;
     set('ai', running && aiFresh && isBeatThis() ? `拍 ${pct(ai.beatProbability)} / 小節頭 ${pct(ai.downProbability)} · 解析 ${(ai.processingMs / 1000).toFixed(2)}秒 · 入力 ${(audio.currentTime - ai.audioTime).toFixed(1)}秒前` : running && aiFresh ? `拍 ${pct(ai.beatProbability)} / 小節頭 ${pct(ai.downProbability)} · ${ai.processedFrames ? (ai.processingMs / ai.processedFrames).toFixed(1) : '—'}ms/フレーム` : '—');
