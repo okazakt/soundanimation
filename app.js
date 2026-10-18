@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.32';
+  const VERSION = '2026.10.18.33';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -741,7 +741,7 @@
     const r = rhythm, m = mood;
     // Brief inter-beat silence must not hide a clock that is still tracking.
     const bridging = running && r.tracking && r.quiet <= Math.max(.6, r.period * 1.4);
-    const audible = running && (!beatThisClient || window.DanceMotion.rhythmVisible(r)) && ((latestInputLevel ? !latestInputLevel.quiet : rawEnergies.some(value => value > .015)) || bridging);
+    const audible = running && (!beatThisClient || window.DanceMotion.soundVisible(r, latestInputLevel)) && ((latestInputLevel ? !latestInputLevel.quiet : rawEnergies.some(value => value > .015)) || bridging);
     const locked = audible && r.tracking && r.confidence > .3 && r.bpm > 0;
     const meterKnown = locked && r.meterConfidence > .5 && r.beatInBar > 0;
     // Lamps follow the actual beat clock every frame, independently of text refresh.
@@ -1081,9 +1081,9 @@
     beatCooldown = Math.max(0, .19 - (rhythm.time - rhythm.lastOnset));
     backgroundTone = lerp(total > .001 ? weighted / total : backgroundTone,
       backgroundTone, Math.exp(-dt / 1.4));
-    backgroundEnergy = lerp((!beatThisClient || window.DanceMotion.rhythmVisible(rhythm))?clamp(total / N / .4, 0, 1):0, backgroundEnergy, Math.exp(-dt / .8));
-    const rhythmAllowed=!beatThisClient || window.DanceMotion.rhythmVisible(rhythm);
-    const drives=rhythmAllowed?regionDrives().map(drive=>beatThisClient?Math.max(.1,drive):drive):[0,0,0,0,0];
+    backgroundEnergy = lerp((!beatThisClient || window.DanceMotion.soundVisible(rhythm, latestInputLevel))?clamp(total / N / .4, 0, 1):0, backgroundEnergy, Math.exp(-dt / .8));
+    const soundAllowed=!beatThisClient || window.DanceMotion.soundVisible(rhythm, latestInputLevel);
+    const drives=soundAllowed?regionDrives().map(drive=>beatThisClient?Math.max(.1,drive):drive):[0,0,0,0,0];
     updateSoundProfile(dt);
     const candidates = flocks.map(f => ({ id: f.id, score: drives[f.region] * (f.voice ? .7 : 1) }))
       .filter(item => item.score > .025).sort((a, b) => b.score - a.score);

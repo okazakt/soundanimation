@@ -72,7 +72,12 @@
       supportAge>=-.1 && supportAge<=Math.max(6,r.period*8) &&
       r.quiet<Math.max(.8,r.period*1.5);
   }
-  const api={energy,styles,BreathingPulse,breathingScale,rhythmVisible};
+  // Raw RMS prevents automatic gain from making faint background noise visible.
+  // Supported rhythm still allows quiet music to render as before.
+  function soundVisible(r,level) {
+    return rhythmVisible(r) || !!(level && !level.quiet && level.rms>=.005);
+  }
+  const api={energy,styles,BreathingPulse,breathingScale,rhythmVisible,soundVisible};
   if(typeof module!=='undefined' && module.exports) module.exports=api;
   else root.DanceMotion=api;
 })(typeof self==='undefined'?globalThis:self);
