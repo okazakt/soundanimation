@@ -38,11 +38,12 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, mood });\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
+    stepMood: (values, dt) => window.stepMood(values, dt), colour: (p, g) => window.particleColour(p, g),
     chooseGate: (...args) => window.chooseFlockGate(...args),
     stepScene: (values, raw, dt) => window.stepScene(values, raw, dt),
     recordTail: (p, time) => window.recordParticleTail(p, time), drawTail: (p, time) => window.drawParticleTail(p, time),
@@ -84,7 +85,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.4'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.5'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -124,8 +125,8 @@ test('frequency regions select independent flocks, coloured particles and backgr
     assert.ok(active.particles.some(p => p.alpha > .5));
     for (const g of state.flocks) for (const p of g.particles) {
       assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
-      assert.ok(p.x >= 0 && p.x <= 390 && p.y >= 0 && p.y <= 740);
     }
+    assert.ok(voices.some(g => g.particles.some(p => p.alpha > .035 && p.x >= 0 && p.x <= 390 && p.y >= 0 && p.y <= 740)), 'audible bands retain visible particles while some may leave the screen');
     f.nodes['#stop'].click(); return { id: active.id, tone: state.backgroundTone };
   }
   const bass = await render(4), treble = await render(900);
@@ -469,4 +470,60 @@ test('sustained audible input stays visible after adaptation and during schedule
   raw.fill(0);
   for (let i = 0; i < 50; i++) f.stepScene(values, raw, .1);
   assert.ok(f.inspect().flocks.every(g => g.presence < .001));
+});
+
+test('mood colours remain multicoloured, with only a few deliberate exceptions', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const { mood, flocks } = f.inspect();
+  const all = flocks.flatMap(g => g.particles.map(p => ({ p, g })));
+  const rebels = all.filter(({ p }) => p.colorRebel);
+  assert.ok(rebels.length > 0 && rebels.length < all.length * .035);
+  mood.warmth = 0;
+  const neutral = all.filter(({ p }) => !p.colorRebel).map(({ p, g }) => f.colour(p, g));
+  assert.ok(neutral.filter(c => c.hue < 80 || c.hue > 335).length > neutral.length * .15);
+  assert.ok(neutral.filter(c => c.hue > 175 && c.hue < 265).length > neutral.length * .15);
+  for (const warmth of [-.8, .8]) {
+    mood.warmth = warmth;
+    const colours = all.map(({ p, g }) => ({ ...f.colour(p, g), rebel: p.colorRebel }));
+    assert.ok(new Set(colours.map(c => Math.round(c.hue))).size > 80);
+    const ordinary = colours.filter(c => !c.rebel);
+    assert.ok(ordinary.every(c => warmth < 0 ? c.hue > 170 && c.hue < 305 : c.hue > 335 || c.hue < 75));
+    assert.ok(colours.some(c => c.rebel && (warmth < 0 ? c.hue < 170 || c.hue > 305 : c.hue > 75 && c.hue < 335)));
+    assert.ok(colours.every(c => Number.isFinite(c.hue) && c.saturation >= 45 && c.lightness >= 48));
+  }
+});
+test('audio mood responds slowly to contrasting timbres and returns cleanly on restart', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const low = new Float64Array(512), high = new Float64Array(512);
+  low.fill(.22, 10, 100); high.fill(.22, 390, 500);
+  for (let i = 0; i < 200; i++) f.stepMood(low, .1);
+  const dark = f.inspect().mood.warmth;
+  assert.ok(dark < -.2);
+  let previous = dark;
+  for (let i = 0; i < 200; i++) {
+    f.stepMood(high, .1);
+    assert.ok(Math.abs(f.inspect().mood.warmth - previous) < .03);
+    previous = f.inspect().mood.warmth;
+  }
+  assert.ok(f.inspect().mood.warmth > .3);
+  f.nodes['#next-mode'].click();
+  assert.equal(f.inspect().mood.warmth, 0); assert.equal(f.inspect().mood.confidence, 0);
+});
+
+test('tonal evidence distinguishes major-like and minor-like chord spectra as a weak cue', () => {
+  function estimate(notes) {
+    const f = fixture(async stream => stream, { width: 8, height: 8 });
+    const values = new Float64Array(512);
+    for (let i = 0; i < 512; i++) {
+      const hz = 40 * Math.pow(14000 / 40, (i + .5) / 512);
+      for (const note of notes) for (let harmonic = 1; harmonic <= 3; harmonic++) {
+        const target = 440 * Math.pow(2, (note - 69) / 12) * harmonic;
+        values[i] += .55 / harmonic * Math.exp(-Math.pow(Math.log2(hz / target) * 90, 2));
+      }
+    }
+    for (let i = 0; i < 100; i++) f.stepMood(values, .1);
+    return f.inspect().mood.keyBias;
+  }
+  const major = estimate([60, 64, 67]), minor = estimate([60, 63, 67]);
+  assert.ok(major > minor + .1, `major ${major}, minor ${minor}`);
 });

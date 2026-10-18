@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.4';
+  const VERSION = '2026.10.18.5';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -113,7 +113,7 @@
   const historyTimes = new Float64Array(HISTORY_SIZE);
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
-    prepareFlocks(); resetRhythm();
+    prepareFlocks(); resetRhythm(); resetMood();
     rawEnergies.fill(0); energies.fill(0);
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
@@ -287,7 +287,7 @@
       signals[i] = target;
     });
     recordSignals(dt);
-    updateRhythm(dt);
+    updateRhythm(dt); updateMood(dt);
     if (mode === 'flocks') {
       updateFlocks(dt);
       environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
@@ -568,6 +568,94 @@
     r.motionScale = lerp(lerp(1, tempoSpeed, r.confidence), r.motionScale, Math.exp(-dt / 1.2));
   }
 
+  // Musical mood is a slow, uncertain audio-feature estimate, not a claim
+  // about the listener's emotion or the meaning of lyrics.
+  const mood = { warmth: 0, activity: .35, tension: .2, confidence: 0,
+    keyBias: 0, time: 0, analysisTime: 0, chroma: new Float64Array(12) };
+  const majorProfile = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
+  const minorProfile = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+  function resetMood() {
+    Object.assign(mood, { warmth: 0, activity: .35, tension: .2, confidence: 0,
+      keyBias: 0, time: 0, analysisTime: 0 }); mood.chroma.fill(0);
+  }
+  function tonalScore(profile, root) {
+    const mean = mood.chroma.reduce((a, b) => a + b, 0) / 12;
+    const pmean = profile.reduce((a, b) => a + b, 0) / 12;
+    let xy = 0, xx = 0, yy = 0;
+    for (let i = 0; i < 12; i++) {
+      const x = mood.chroma[(i + root) % 12] - mean, y = profile[i] - pmean;
+      xy += x * y; xx += x * x; yy += y * y;
+    }
+    return xy / Math.max(1e-9, Math.sqrt(xx * yy));
+  }
+  function updateMood(dt) {
+    const m = mood; m.time += dt; m.analysisTime += dt;
+    let total = 0, weighted = 0, squares = 0, logs = 0;
+    const chroma = new Float64Array(12);
+    const maximum = audio ? Math.min(14000, audio.sampleRate / 2) : 14000;
+    for (let i = 0; i < N; i++) {
+      const value = rawEnergies[i]; total += value; squares += value * value;
+      weighted += value * i / (N - 1); logs += Math.log(Math.max(1e-5, value));
+      const frequency = 40 * Math.pow(maximum / 40, (i + .5) / N);
+      if (frequency >= 130 && frequency <= 2200) {
+        const note = Math.round(69 + 12 * Math.log2(frequency / 440));
+        chroma[((note % 12) + 12) % 12] += value * value;
+      }
+    }
+    const mean = total / N;
+    if (mean < .003) {
+      m.confidence *= Math.exp(-dt / 3); return;
+    }
+    for (let i = 0; i < 12; i++) m.chroma[i] = lerp(chroma[i], m.chroma[i], Math.exp(-dt / 3));
+    if (m.analysisTime >= .5) {
+      m.analysisTime = 0;
+      let major = -1, minor = -1;
+      for (let root = 0; root < 12; root++) {
+        major = Math.max(major, tonalScore(majorProfile, root));
+        minor = Math.max(minor, tonalScore(minorProfile, root));
+      }
+      // Relative major/minor ambiguity is common: tonal evidence stays weak.
+      m.keyBias = clamp((major - minor) * 3, -1, 1) * clamp(Math.max(major, minor), 0, 1);
+    }
+    const brightness = weighted / Math.max(.001, total);
+    const rms = Math.sqrt(squares / N);
+    const tempo = rhythm.bpm ? clamp((rhythm.bpm - 70) / 100, 0, 1) : .35;
+    const activity = clamp(tempo * rhythm.confidence * .55 + rms * 1.6 + rhythm.fluxAverage * 5, 0, 1);
+    const flatness = Math.exp(logs / N) / Math.max(.00001, mean);
+    const tension = clamp(flatness * .45 + Math.max(0, brightness - .45) * .7 + rhythm.fluxAverage * 4, 0, 1);
+    const warmth = clamp((brightness - .48) * 1.35 + m.keyBias * .65 + (activity - .4) * .18, -1, 1);
+    m.warmth = lerp(warmth, m.warmth, Math.exp(-dt / 6));
+    m.activity = lerp(activity, m.activity, Math.exp(-dt / 4));
+    m.tension = lerp(tension, m.tension, Math.exp(-dt / 5));
+    m.confidence = lerp(clamp(mean * 12, .2, 1), m.confidence, Math.exp(-dt / 4));
+  }
+  function mixHue(a, b, k) { return (a + (((b - a + 540) % 360) - 180) * k + 360) % 360; }
+  const moodCoolHues = [185, 215, 245, 285], moodWarmHues = [350, 16, 38, 60];
+  const moodSpriteHues = [27, 40, 35, 200, 230, 275, 340];
+  function particleColour(p, f) {
+    // Four related colours per mood, with continuous individual variation.
+    const cool = moodCoolHues, warm = moodWarmHues;
+    const coordinate = clamp(p.tint * .65 + p.baseTone * .35 + f.colorShift * .12, 0, 1) * 3;
+    const i = Math.min(2, Math.floor(coordinate)), k = coordinate - i;
+    const coldHue = mixHue(cool[i], cool[i + 1], k), warmHue = mixHue(warm[i], warm[i + 1], k);
+    // Individuals cross between palettes at different points. An uncertain
+    // mood retains both warm and cool colours rather than collapsing to pink.
+    let blend = clamp((mood.warmth + (p.tint - .5) * .84 + .16) / .32, 0, 1);
+    blend = blend * blend * (3 - 2 * blend);
+    let hue = mixHue(coldHue, warmHue, blend);
+    const wander = Math.sin(mood.time * .17 + p.colorPhase) * 3;
+    hue = (hue + f.beatHue * .55 + wander + (p.colorRebel ? 130 + p.tint * 70 : 0) + 360) % 360;
+    const saturation = clamp(66 + mood.activity * 20 + (p.tint - .5) * 12 - mood.tension * 5, 45, 92);
+    const lightness = clamp(60 + p.strength * 19 - mood.tension * 4 + (p.tint - .5) * 6, 48, 83);
+    const spriteHues = moodSpriteHues;
+    let sprite = 0, distance = Infinity;
+    spriteHues.forEach((h, i) => {
+      const d = Math.abs(((h - hue + 540) % 360) - 180);
+      if (d < distance) { distance = d; sprite = i; }
+    });
+    return { hue, saturation, lightness, sprite };
+  }
+
   // Five logarithmic frequency regions (angular frequency ω = 2πf has
   // the same band ordering). Particle colours follow their individual bands.
   let flocks = [], beatCooldown = 0;
@@ -631,7 +719,8 @@
       particles: Array.from({ length: 128 }, (_, j) => ({
         band: flockRanges[id % 5] + Math.floor(hash(id, j, 8005) * (flockRanges[id % 5 + 1] - flockRanges[id % 5])),
         angle: j * 2.3999632297, distance: Math.sqrt(hash(id, j, 8010)),
-        tint: hash(id, j, 8021), mirrorX: width / 2, mirrorY: height / 2, mvx: 0, mvy: 0,
+        tint: hash(id, j, 8021), colorRebel: hash(id, j, 8040) < .018,
+        colorPhase: hash(id, j, 8041) * Math.PI * 2, mirrorX: width / 2, mirrorY: height / 2, mvx: 0, mvy: 0,
         size: particleSize(hash(id, j, 8012)),
         travelState: 0, travelTarget: -1, travelAge: 0, guestUntil: 0, mirrorWeight: 1,
         tail: new Float64Array(36), tailHead: 0, tailCount: 0, tailTime: -10,
@@ -1004,11 +1093,10 @@
     ctx.globalCompositeOperation = 'lighter';
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
-      const tone = clamp(p.baseTone + (p.tint - .5) * .28 + f.colorShift + p.strength * .07, 0, 1);
-      const hue = (32 + tone * 270 + f.beatHue + 360) % 360;
+      const colour = particleColour(p, f), hue = colour.hue;
       const radius = p.size * (.8 + p.strength * 1.15 + f.pulse * .65) * (1 - f.collapse * .65);
       const glow = 12 + radius * 3;
-      const colorIndex = Math.round(clamp(tone + f.beatHue / 270, 0, 1) * (glows.length - 1));
+      const colorIndex = colour.sprite;
       const copies = [[p.x, p.y, 1]];
       if (f.mirrorAlpha * p.mirrorWeight > .005) copies.push([p.mirrorX, p.mirrorY, f.mirrorAlpha * p.mirrorWeight]);
       for (const [x, y, opacity] of copies) {
@@ -1018,7 +1106,7 @@
         ctx.globalAlpha = p.alpha * opacity * (.25 + p.strength * .4);
         ctx.drawImage(glows[colorIndex][2], x - glow, y - glow, glow * 2, glow * 2);
         ctx.globalAlpha = p.alpha * opacity * (.6 + p.strength * .4);
-        ctx.fillStyle = `hsl(${hue},${72 + p.tint * 20}%,${60 + p.strength * 20}%)`;
+        ctx.fillStyle = `hsl(${hue},${colour.saturation}%,${colour.lightness}%)`;
         ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
       }
     }
