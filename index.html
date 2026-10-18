@@ -8,9 +8,9 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.9">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.10">
   <title>Starlight Bell</title>
-  <script src="./app.js?v=2026.10.18.9" defer></script>
+  <script src="./app.js?v=2026.10.18.10" defer></script>
 </head>
 <body>
   <main id="sky" aria-label="音に反応する光のアニメーション">
@@ -21,6 +21,10 @@
     <div id="intro"><p class="eyebrow">STARLIGHT BELL</p><h1 id="intro-title">音を、光の動きに。</h1><p>下の「開始」を押して<br>音の流れを眺める</p></div>
     <p id="notice" role="status" aria-live="polite"></p>
   </main>
+  <div id="microphone-controls">
+    <label><input id="builtin-microphone" type="checkbox" checked> 本体マイクを指定する</label>
+    <p id="microphone-status" role="status" aria-live="polite">マイク停止中</p>
+  </div>
   <footer aria-label="観測の操作">
     <button id="previous-mode" class="mode-arrow" type="button" aria-label="前のアニメーション：星空"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
     <button id="start" type="button">開始</button>

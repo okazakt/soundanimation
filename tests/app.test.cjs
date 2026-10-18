@@ -32,8 +32,8 @@ function fixture(getMicrophone, options = {}) {
   const navigator = { mediaDevices: { getUserMedia: async constraints => {
     requestCount++; assert.equal(constraints.audio.autoGainControl, false);
     assert.equal(constraints.audio.noiseSuppression, false);
-    return getMicrophone(stream);
-  } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
+    return getMicrophone(stream, constraints);
+  }, enumerateDevices: options.enumerateDevices }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
   const window = { AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
@@ -54,6 +54,63 @@ function fixture(getMicrophone, options = {}) {
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('built-in microphone uses exact device ID and releases permission stream', async () => {
+  const requests = [];
+  const f = fixture(async (stream, constraints) => {
+    requests.push(constraints);
+    return stream;
+  }, { enumerateDevices: async () => [
+    { kind: 'audioinput', deviceId: 'car', label: 'Bluetooth' },
+    { kind: 'audioinput', deviceId: 'phone', label: 'iPhone Microphone' }
+  ] });
+  f.nodes['#builtin-microphone'].checked = true;
+  await f.nodes['#start'].click();
+  assert.equal(requests[1].audio.deviceId.exact, 'phone');
+  assert.match(f.nodes['#microphone-status'].textContent, /本体マイク指定：iPhone/);
+  assert.equal(f.counts().stopped, 1);
+  f.nodes['#stop'].click();
+  assert.equal(f.counts().stopped, 2);
+  assert.equal(f.nodes['#builtin-microphone'].disabled, false);
+});
+test('missing built-in microphone stops without Bluetooth fallback or demo', async () => {
+  const f = fixture(async stream => stream, { enumerateDevices: async () => [
+    { kind: 'audioinput', deviceId: 'car', label: 'Bluetooth' }
+  ] });
+  f.nodes['#builtin-microphone'].checked = true;
+  await f.nodes['#start'].click();
+  assert.equal(f.counts().requestCount, 1);
+  assert.equal(f.counts().stopped, 1);
+  assert.equal(f.frames.size, 0);
+  assert.match(f.nodes['#microphone-status'].textContent, /指定できません/);
+  assert.equal(f.nodes['#start'].disabled, false);
+});
+test('stop during device enumeration prevents another microphone request', async () => {
+  let resolveDevices;
+  const f = fixture(async stream => stream, { enumerateDevices: () => new Promise(resolve => { resolveDevices = resolve; }) });
+  f.nodes['#builtin-microphone'].checked = true;
+  const pending = f.nodes['#start'].click(); await flush();
+  f.nodes['#stop'].click();
+  resolveDevices([{ kind: 'audioinput', deviceId: 'phone', label: 'iPhone Microphone' }]);
+  await pending;
+  assert.equal(f.counts().requestCount, 1);
+  assert.equal(f.counts().stopped, 1);
+  assert.equal(f.frames.size, 0);
+});
+test('rejected exact selection or mismatched input stops without fallback', async () => {
+  for (const mismatch of [false, true]) {
+    const f = fixture(async (stream, constraints) => {
+      if (!constraints.audio.deviceId) return stream;
+      if (!mismatch) throw new Error('OverconstrainedError');
+      return { ...stream, getAudioTracks: () => [{ getSettings: () => ({ deviceId: 'car' }) }] };
+    }, { enumerateDevices: async () => [{ kind: 'audioinput', deviceId: 'phone', label: 'iPhone Microphone' }] });
+    f.nodes['#builtin-microphone'].checked = true;
+    await f.nodes['#start'].click();
+    assert.equal(f.counts().requestCount, 2);
+    assert.equal(f.counts().stopped, mismatch ? 2 : 1);
+    assert.equal(f.frames.size, 0);
+    assert.match(f.nodes['#microphone-status'].textContent, /指定できません/);
+  }
+});
 test('start, draw, background/resume, stop release microphone and wake lock', async () => {
   const f = fixture(async stream => stream);
   await f.nodes['#start'].click(); await flush(); await f.tick();
@@ -89,7 +146,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.9'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.10'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
