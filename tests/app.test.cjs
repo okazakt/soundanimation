@@ -12,7 +12,8 @@ function fixture(getMicrophone, options = {}) {
   const gradient = { addColorStop() {} };
   const context = new Proxy({
     createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; },
-    putImageData(data) { image = data; }
+    putImageData(data) { image = data; },
+    quadraticCurveTo(...args) { options.curves?.push(args); }
   }, { get(target, key) { return target[key] || (() => gradient); } });
   const node = () => ({ disabled: false, textContent: '', classList: { add() {}, remove() {} },
     setAttribute() {}, addEventListener(type, fn) { this[type] = fn; }, getContext: () => context,
@@ -37,11 +38,12 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
     finishTransfers: moves => window.finishTransfers(moves),
+    recordTail: (p, time) => window.recordParticleTail(p, time), drawTail: (p, time) => window.drawParticleTail(p, time),
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -80,7 +82,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.2'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.3'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -364,4 +366,52 @@ test('sizes include fine dust and rare large individuals; migration preserves th
   assert.ok(owner.particles.includes(waiting));
   f.nodes['#next-mode'].click();
   assert.ok(f.inspect().flocks.every(g => g.particles.every(p => p.travelState === 0 && p.guestUntil === 0)));
+});
+
+test('human timing jitter and gradual tempo drift are absorbed without losing the beat', () => {
+  const { f, step } = rhythmFixture();
+  const beats = Array.from({ length: 32 }, (_, i) => .15 + i * .5 + Math.sin(i * 1.71) * .028);
+  for (let i = 0; i < 60 * 16; i++) step(1 / 60, beats.some(t => i / 60 >= t && i / 60 < t + .04));
+  assert.ok(Math.abs(f.inspect().rhythm.bpm - 120) < 5, `jitter BPM ${f.inspect().rhythm.bpm}`);
+  assert.ok(f.inspect().rhythm.confidence > .4, `jitter confidence ${f.inspect().rhythm.confidence}`);
+  const second = rhythmFixture();
+  let time = .15;
+  const ramp = [];
+  for (let i = 0; i < 42; i++) { ramp.push(time + Math.sin(i * 1.3) * .012); time += 60 / (100 + Math.min(40, i * 1.3)); }
+  let early;
+  for (let i = 0; i < Math.floor(time * 60); i++) {
+    second.step(1 / 60, ramp.some(t => i / 60 >= t && i / 60 < t + .04));
+    if (i === 60 * 5) early = second.f.inspect().rhythm.bpm;
+  }
+  const final = second.f.inspect().rhythm;
+  assert.ok(final.bpm > 127 && final.bpm < 147, `drift BPM ${final.bpm}, early ${early}`);
+  assert.ok(final.bpm > early + 15);
+  assert.ok(final.confidence > .3);
+});
+test('overall motion scale follows slow and fast tempi with gradual changes', () => {
+  for (const bpm of [90, 150]) {
+    const { f, step } = rhythmFixture();
+    let previous = 1;
+    for (let i = 0; i < 60 * 10; i++) {
+      const r = step(1 / 60, (i / 60) % (60 / bpm) < .06);
+      assert.ok(Math.abs(r.motionScale - previous) < .015); previous = r.motionScale;
+    }
+    const scale = f.inspect().rhythm.motionScale;
+    assert.ok(bpm === 90 ? scale < .8 : scale > 1.15, `${bpm} BPM scale ${scale}`);
+  }
+});
+test('soft wakes use bounded real position history and curved strokes, expiring after gaps', () => {
+  const curves = [];
+  const f = fixture(async stream => stream, { width: 8, height: 8, curves });
+  const p = f.inspect().flocks[0].particles[0]; p.size = 2;
+  for (let i = 0; i <= 60; i++) {
+    p.x = i * .7; p.y = Math.sin(i * .1) * 4; f.recordTail(p, i / 60);
+  }
+  assert.equal(p.tailCount, 12); assert.equal(p.tail.length, 36);
+  const snapshot = Array.from(p.tail);
+  f.drawTail(p, 1);
+  assert.ok(curves.length > 0 && curves.every(values => values.every(Number.isFinite)));
+  assert.deepEqual(Array.from(p.tail), snapshot, 'rendering does not move stored points');
+  curves.length = 0; f.drawTail(p, 2);
+  assert.equal(curves.length, 0, 'no stale trail bridges a pause');
 });

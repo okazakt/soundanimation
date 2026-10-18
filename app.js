@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.2';
+  const VERSION = '2026.10.18.3';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -427,12 +427,12 @@
   // Online beat tracking: spectral onsets vote for a tempo, then a gently
   // corrected clock carries the beat between transients. No sound is stored.
   const rhythm = { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
-    period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0,
+    period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1,
     fluxAverage: 0, quiet: 0, onset: false, beat: false,
     previous: new Float64Array(N), votes: new Float64Array(181), events: [] };
   function resetRhythm() {
     Object.assign(rhythm, { time: 0, lastOnset: -10, lastBeat: -10, nextBeat: 0,
-      period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0,
+      period: .5, bpm: 0, confidence: 0, phase: 0, pulse: 0, beatCount: 0, motionScale: 1,
       fluxAverage: 0, quiet: 0, onset: false, beat: false });
     rhythm.previous.fill(0); rhythm.votes.fill(0); rhythm.events = [];
   }
@@ -449,7 +449,7 @@
     r.quiet = level > .003 ? 0 : r.quiet + dt;
     const onset = flux > .006 && flux > r.fluxAverage * 2.2 + .002 && r.time - r.lastOnset > .19;
     r.fluxAverage = lerp(flux, r.fluxAverage, Math.exp(-dt / .65));
-    const voteDecay = Math.exp(-dt / 5);
+    const voteDecay = Math.exp(-dt / 3.5);
     for (let bpm = 60; bpm <= 180; bpm++) r.votes[bpm] *= voteDecay;
     r.events = r.events.filter(event => r.time - event.time < 7);
     if (onset) {
@@ -462,8 +462,9 @@
           const bpm = 60 * beats / delta;
           if (bpm < 59 || bpm > 181) continue;
           const weight = Math.exp(-delta / 4) / beats * (j === r.events.length - 1 ? 1.6 : .5);
-          for (let bin = Math.max(60, Math.floor(bpm) - 3); bin <= Math.min(180, Math.ceil(bpm) + 3); bin++) {
-            r.votes[bin] += weight * Math.exp(-.5 * ((bin - bpm) / 1.6) ** 2);
+          const spread = Math.max(2, bpm * .03);
+          for (let bin = Math.max(60, Math.floor(bpm - spread * 2)); bin <= Math.min(180, Math.ceil(bpm + spread * 2)); bin++) {
+            r.votes[bin] += weight * Math.exp(-.5 * ((bin - bpm) / spread) ** 2);
           }
         }
       }
@@ -474,27 +475,40 @@
         const score = r.votes[bpm] * prior;
         if (score > best) { best = score; winner = bpm; }
       }
-      for (let bpm = 60; bpm <= 180; bpm++) if (Math.abs(bpm - winner) > 6) runner = Math.max(runner, r.votes[bpm]);
+      for (let bpm = 60; bpm <= 180; bpm++) if (Math.abs(bpm - winner) > Math.max(7, winner * .08)) runner = Math.max(runner, r.votes[bpm]);
       if (winner && r.events.length >= 4) {
         const period = 60 / winner;
         const recent = r.events.slice(-10);
         let coherent = 0;
         for (const event of recent) {
           const cycles = (r.time - event.time) / period;
-          if (Math.abs(cycles - Math.round(cycles)) < .14) coherent++;
+          if (Math.abs(cycles - Math.round(cycles)) < .20) coherent++;
         }
         const certainty = clamp((best - runner) / Math.max(.01, best) * 2, 0, 1) *
           clamp((coherent / recent.length - .55) / .4, 0, 1) * clamp((recent.length - 2) / 4, 0, 1);
         const wasLocked = r.confidence > .3;
         r.confidence = lerp(r.confidence, certainty, .4);
         if (certainty > .3) {
-          r.bpm = wasLocked ? lerp(r.bpm, winner, .22) : winner;
+          // Median recent intervals ignore early/late individual hits and
+          // bridge missing beats, while following a gradual human tempo drift.
+          const intervals = [];
+          for (let i = 1; i < recent.length; i++) {
+            const gap = recent[i].time - recent[i - 1].time;
+            const beats = Math.max(1, Math.round(gap / period));
+            const sample = gap / beats;
+            if (Math.abs(sample - period) < period * .23) intervals.push(sample);
+          }
+          intervals.sort((a, b) => a - b);
+          const middle = Math.floor(intervals.length / 2);
+          const median = intervals.length ? (intervals[middle] + intervals[Math.max(0, Math.ceil(intervals.length / 2) - 1)]) / 2 : period;
+          const candidate = lerp(winner, 60 / median, .45);
+          r.bpm = wasLocked ? lerp(r.bpm, candidate, .2) : candidate;
           r.period = 60 / r.bpm;
           if (!wasLocked) r.nextBeat = r.time + r.period;
           else {
             const nearest = r.nextBeat + Math.round((r.time - r.nextBeat) / r.period) * r.period;
             const error = r.time - nearest;
-            if (Math.abs(error) < r.period * .2) r.nextBeat += clamp(error, -.06, .06) * .25;
+            if (Math.abs(error) < r.period * .27) r.nextBeat += clamp(error, -.085, .085) * .2;
           }
         }
       }
@@ -510,6 +524,8 @@
       r.pulse = Math.exp(-r.phase * 9);
     } else { r.pulse *= Math.exp(-dt / .18); }
     if (stale && r.confidence < .03) { r.bpm = 0; r.events = []; r.votes.fill(0); }
+    const tempoSpeed = r.bpm ? clamp(Math.pow(r.bpm / 120, 1.2), .5, 1.65) : 1;
+    r.motionScale = lerp(lerp(1, tempoSpeed, r.confidence), r.motionScale, Math.exp(-dt / 1.2));
   }
 
   // Five logarithmic frequency regions (angular frequency ω = 2πf has
@@ -550,6 +566,7 @@
       p.band = low + Math.floor(p.tint * (high - low));
       Object.assign(spare, { x: owner.x, y: owner.y, vx: owner.vx, vy: owner.vy,
         alpha: 0, strength: 0, travelState: 0, travelTarget: -1, travelAge: 0,
+        tailCount: 0, tailHead: 0, tailTime: -10,
         guestUntil: 0, nextTrip: elapsed + 10 + spare.tint * 12,
         band: flockRanges[owner.region] + Math.floor(spare.tint * (flockRanges[owner.region + 1] - flockRanges[owner.region])) });
     }
@@ -576,6 +593,7 @@
         tint: hash(id, j, 8021), mirrorX: width / 2, mirrorY: height / 2, mvx: 0, mvy: 0,
         size: particleSize(hash(id, j, 8012)),
         travelState: 0, travelTarget: -1, travelAge: 0, guestUntil: 0, mirrorWeight: 1,
+        tail: new Float64Array(36), tailHead: 0, tailCount: 0, tailTime: -10,
         nextTrip: 4 + hash(id, j, 8030) * 15, driftAngle: 0,
         baseTone: (flockRanges[id % 5] + hash(id, j, 8005) * (flockRanges[id % 5 + 1] - flockRanges[id % 5])) / (N - 1),
         x: width * (.2 + .6 * hash(id, 0, 8001)),
@@ -638,7 +656,8 @@
             p.x = f.x + Math.cos(p.angle) * r; p.y = f.y + Math.sin(p.angle) * r;
             p.vx = Math.cos(p.angle + Math.PI / 2) * 35;
             p.vy = Math.sin(p.angle + Math.PI / 2) * 35; p.alpha = 0;
-            p.travelState = 0; p.travelTarget = -1; p.guestUntil = 0; });
+            p.travelState = 0; p.travelTarget = -1; p.guestUntil = 0;
+            p.tailCount = p.tailHead = 0; p.tailTime = -10; });
         }
         f.episode++;
         f.exitStyle = (f.id + f.episode - 1) % 4;
@@ -662,7 +681,7 @@
       f.motionLevel = lerp(f.level, f.motionLevel, Math.exp(-dt / .38));
       f.motionPulse = lerp(f.pulse, f.motionPulse, Math.exp(-dt / .12));
       // Beats still light up immediately; travel speed absorbs their impulse.
-      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25 + f.motionPulse * .7 + f.groove * .4) * f.speedScale;
+      const speedTarget = (.8 + f.region * .16 + f.motionLevel * 1.25 + f.motionPulse * .7 + f.groove * .4) * f.speedScale * rhythm.motionScale;
       f.phaseSpeed = lerp(speedTarget, f.phaseSpeed, Math.exp(-dt / .5));
       f.phase += dt * f.phaseSpeed;
       const t = f.phase;
@@ -769,7 +788,7 @@
         }
         if (neighbours) { alignX /= neighbours; alignY /= neighbours; }
         const speed = (50 + f.motionLevel * 65 + f.motionPulse * 18 + f.groove * 24) * f.speedScale *
-          (.75 + p.tint * .5) * Math.min(width, height) / 390;
+          (.75 + p.tint * .5) * Math.min(width, height) / 390 * rhythm.motionScale;
         const rotation = f.id % 2 ? -1 : 1;
         // These are velocity fields evaluated at the particle's CURRENT
         // position. No particle is assigned an angle or a place on a shape.
@@ -820,7 +839,7 @@
         } else if (p.travelState === 2) {
           const host = flocks[p.travelTarget];
           const dx = host.x - p.x, dy = host.y - p.y, d = Math.max(1, Math.hypot(dx, dy));
-          const travelSpeed = Math.min(180, d * 1.6);
+          const travelSpeed = Math.min(180, d * 1.6) * rhythm.motionScale;
           flowX = host.vx + dx / d * travelSpeed;
           flowY = host.vy + dy / d * travelSpeed;
         }
@@ -847,6 +866,7 @@
           p.vx += ax * factor * h; p.vy += ay * factor * h;
           p.x += p.vx * h; p.y += p.vy * h;
         }
+        recordParticleTail(p, elapsed);
         const mx = f.mirrorType === 1 || f.mirrorType === 3 ? width - p.x : p.x;
         const my = f.mirrorType === 2 || f.mirrorType === 3 ? height - p.y : p.y;
         springAxis(p, 'mirrorX', 'mvx', mx, 10, dt);
@@ -854,6 +874,46 @@
       });
     }
     finishTransfers(transfers);
+  }
+  function recordParticleTail(p, time) {
+    if (time - p.tailTime < 1 / 60 - 1e-6) return;
+    const index = p.tailHead * 3;
+    p.tail[index] = p.x; p.tail[index + 1] = p.y; p.tail[index + 2] = time;
+    p.tailHead = (p.tailHead + 1) % 12;
+    p.tailCount = Math.min(12, p.tailCount + 1); p.tailTime = time;
+  }
+  function drawParticleTail(p, x, y, sx, sy, hue, opacity, radius, now = elapsed) {
+    if (p.size < .45 || p.tailCount < 3) return;
+    // Follow a short, real trajectory. Stop at a gap or excessive length so
+    // fast dispersal cannot turn a soft wake into a long straight whisker.
+    const points = [{ x, y, age: 0 }];
+    const limit = Math.min(32, 8 + radius * 2), lifetime = .16;
+    let length = 0;
+    for (let k = 0; k < p.tailCount; k++) {
+      const index = ((p.tailHead - 1 - k + 12) % 12) * 3;
+      const age = now - p.tail[index + 2];
+      if (age > lifetime || age < 0) break;
+      const px = x + (p.tail[index] - p.x) * sx, py = y + (p.tail[index + 1] - p.y) * sy;
+      const last = points[points.length - 1], distance = Math.hypot(px - last.x, py - last.y);
+      if (distance < .65) continue;
+      length += distance;
+      if (length > limit) break;
+      points.push({ x: px, y: py, age });
+      if (points.length >= 7) break;
+    }
+    if (points.length < 3) return;
+    ctx.strokeStyle = `hsl(${hue},65%,76%)`; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    let from = points[points.length - 1];
+    for (let i = points.length - 2; i >= 0; i--) {
+      const control = points[i], next = points[Math.max(0, i - 1)];
+      const end = i === 0 ? control : { x: (control.x + next.x) / 2, y: (control.y + next.y) / 2 };
+      const freshness = Math.max(0, 1 - (control.age + from.age) / (2 * lifetime));
+      const strokeWidth = Math.min(1.5, radius * .28) * (.15 + .85 * freshness);
+      ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
+      if (p.size > 2) { ctx.globalAlpha = opacity * .035 * freshness ** 2; ctx.lineWidth = strokeWidth * 2.8; ctx.stroke(); }
+      ctx.globalAlpha = opacity * .15 * freshness ** 2; ctx.lineWidth = strokeWidth; ctx.stroke();
+      from = { ...end, age: control.age };
+    }
   }
   function drawFlocks() {
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
@@ -875,9 +935,7 @@
       for (const [x, y, opacity] of copies) {
         const reflectedX = x === p.x ? 1 : (f.mirrorType === 1 || f.mirrorType === 3 ? -1 : 1);
         const reflectedY = y === p.y ? 1 : (f.mirrorType === 2 || f.mirrorType === 3 ? -1 : 1);
-        ctx.globalAlpha = p.alpha * opacity * .2;
-        ctx.strokeStyle = `hsl(${hue},85%,70%)`; ctx.lineWidth = Math.min(1.8, radius * .45);
-        ctx.beginPath(); ctx.moveTo(x - p.vx * .1 * reflectedX, y - p.vy * .1 * reflectedY); ctx.lineTo(x, y); ctx.stroke();
+        drawParticleTail(p, x, y, reflectedX, reflectedY, hue, p.alpha * opacity, radius);
         ctx.globalAlpha = p.alpha * opacity * (.25 + p.strength * .4);
         ctx.drawImage(glows[colorIndex][2], x - glow, y - glow, glow * 2, glow * 2);
         ctx.globalAlpha = p.alpha * opacity * (.6 + p.strength * .4);
