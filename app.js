@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.10';
+  const VERSION = '2026.10.18.11';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -10,6 +10,58 @@
   const stopButton = document.querySelector('#stop');
   const builtinMicrophone = document.querySelector('#builtin-microphone');
   const microphoneStatus = document.querySelector('#microphone-status');
+  const microphoneSelect = document.querySelector('#microphone-select');
+  const refreshMicrophones = document.querySelector('#refresh-microphones');
+  const microphoneListStatus = document.querySelector('#microphone-list-status');
+  function showMicrophones(devices) {
+    const previous = microphoneSelect.value || '';
+    const inputs = devices.filter(device => device.kind === 'audioinput' && device.deviceId);
+    const option = (value, text) => {
+      const node = document.createElement('option'); node.value = value; node.textContent = text; return node;
+    };
+    const choices = [option('', '自動／本体マイク設定を使用'),
+      ...inputs.map((device, i) => option(device.deviceId, device.label || `マイク ${i + 1}（名前未公開）`))];
+    if (previous && !inputs.some(device => device.deviceId === previous)) choices.push(option(previous, '選択中のマイク（現在一覧にありません）'));
+    microphoneSelect.replaceChildren(...choices);
+    microphoneSelect.value = previous;
+    microphoneListStatus.textContent = inputs.length ? `ブラウザが公開する入力：${inputs.length}件` : '選択できる入力が公開されていません';
+  }
+  async function updateMicrophones() {
+    if (starting || refreshMicrophones.disabled) return;
+    const token = generation;
+    let permissionStream;
+    refreshMicrophones.disabled = true; startButton.disabled = true;
+    microphoneSelect.disabled = true; builtinMicrophone.disabled = true;
+    microphoneListStatus.textContent = 'マイク一覧を確認中…';
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) throw new Error('unsupported');
+      if (!stream) permissionStream = await navigator.mediaDevices.getUserMedia({ audio: {
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false
+      }, video: false });
+      if (token !== generation) return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      if (token === generation) showMicrophones(devices);
+    } catch {
+      if (token === generation) microphoneListStatus.textContent = '一覧を取得できませんでした。マイクの許可と接続を確認してください。';
+    } finally {
+      permissionStream?.getTracks().forEach(track => track.stop());
+      if (token === generation) {
+        refreshMicrophones.disabled = false; microphoneSelect.disabled = false;
+        startButton.disabled = running; builtinMicrophone.disabled = running;
+      }
+    }
+  }
+  refreshMicrophones.addEventListener('click', updateMicrophones);
+  navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+    const token = generation;
+    navigator.mediaDevices.enumerateDevices().then(devices => {
+      if (token === generation) showMicrophones(devices);
+    }).catch(() => {});
+  });
+  microphoneSelect.addEventListener('change', () => {
+    if (microphoneSelect.value) builtinMicrophone.checked = false;
+    if (running) { stop(); return start(); }
+  });
   const laneCanvas = document.querySelector('#lane-transition');
   const theme = document.querySelector('#theme');
   let themeTimer;
@@ -193,6 +245,7 @@
     const token = ++generation;
     starting = true; startButton.disabled = true; stopButton.disabled = false;
     builtinMicrophone.disabled = true;
+    microphoneSelect.disabled = true; refreshMicrophones.disabled = true;
     microphoneStatus.textContent = 'マイクを準備中…';
     startButton.textContent = '準備中…';
     fieldSeed = (fieldSeed + 1 + Math.floor(Math.random() * 0xfffffffe)) >>> 0;
@@ -208,10 +261,19 @@
       // Resume directly from the user's gesture, before awaiting microphone permission.
       await localAudio.resume();
       if (token !== generation) { await localAudio.close().catch(() => {}); return; }
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: {
+      const requestedDevice = microphoneSelect.value || '';
+      const constraints = { audio: {
         echoCancellation: false, noiseSuppression: false, autoGainControl: false
-      }, video: false });
-      if (builtinMicrophone.checked && token === generation) {
+      }, video: false };
+      if (requestedDevice) constraints.audio.deviceId = { exact: requestedDevice };
+      try { localStream = await navigator.mediaDevices.getUserMedia(constraints); }
+      catch (error) { if (requestedDevice) throw new Error('selected-unavailable'); throw error; }
+      if (requestedDevice) {
+        const track = localStream.getAudioTracks()[0];
+        const actual = track?.getSettings?.().deviceId;
+        if (actual && actual !== requestedDevice) throw new Error('selected-unavailable');
+        if (token === generation) microphoneStatus.textContent = `選択した入力：${track?.label || 'マイク'}${actual ? '' : '（選択結果の確認不可）'}`;
+      } else if (builtinMicrophone.checked && token === generation) {
         // Labels are available after permission. Do not guess that "default"
         // means the built-in input, and never silently fall back to Bluetooth.
         let devices;
@@ -245,6 +307,11 @@
         await localAudio.close().catch(() => {}); return;
       }
       stream = localStream;
+      if (navigator.mediaDevices.enumerateDevices) {
+        navigator.mediaDevices.enumerateDevices().then(devices => {
+          if (token === generation) showMicrophones(devices);
+        }).catch(() => {});
+      }
       analyser = localAudio.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = .15;
       bins = new Uint8Array(analyser.frequencyBinCount);
       source = localAudio.createMediaStreamSource(stream); source.connect(analyser);
@@ -257,6 +324,10 @@
       localStream?.getTracks().forEach(track => track.stop());
       if (localAudio && localAudio.state !== 'closed') await localAudio.close().catch(() => {});
       if (token !== generation) return;
+      if (error.message === 'selected-unavailable') {
+        stop(); microphoneStatus.textContent = '選択したマイクを使用できませんでした';
+        message('別のマイクを選ぶか、「一覧を更新」で接続を確認してください。', 8000); return;
+      }
       if (error.message === 'builtin-unavailable') {
         stop();
         microphoneStatus.textContent = '本体マイクを指定できませんでした';
@@ -269,6 +340,7 @@
     }
     if (token !== generation) return;
     starting = false; running = true; startButton.textContent = '開始';
+    microphoneSelect.disabled = false; refreshMicrophones.disabled = false;
     intro.classList.add('hidden'); previous = 0;
     acquireWake(); frameId = requestAnimationFrame(frame);
   }
@@ -283,6 +355,7 @@
     clearTimeout(noticeTimer); notice.classList.remove('visible');
     startButton.disabled = false; startButton.textContent = '開始'; stopButton.disabled = true;
     builtinMicrophone.disabled = false;
+    microphoneSelect.disabled = false; refreshMicrophones.disabled = false;
     microphoneStatus.textContent = 'マイク停止中';
     channels.forEach(s => { s.intensity = 0; });
     resetSignals();

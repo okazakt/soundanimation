@@ -20,6 +20,10 @@ button:not(:disabled):active { background: #c4dcff30; }
 #microphone-controls label { display: inline-flex; align-items: center; min-height: 36px; gap: 6px; }
 #builtin-microphone { width: 18px; height: 18px; accent-color: #c4dcff; }
 #microphone-status { margin: 0 0 6px; font-size: 11px; overflow-wrap: anywhere; }
+.microphone-picker { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+#microphone-select { flex: 1; min-width: 0; max-width: 300px; min-height: 40px; background: #101a30; color: #edf2ff; border: 1px solid #a9bed64d; border-radius: 8px; font: inherit; }
+#refresh-microphones { flex: none; min-height: 40px; padding: 0 10px; font-size: 12px; letter-spacing: 0; }
+#microphone-list-status { margin: 6px 0 0; font-size: 11px; }
 @media (prefers-reduced-motion: reduce) { #intro, #notice { transition: none; } }
 
 #version { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); margin: 0; color: #c4c9d8; font-size: 11px; letter-spacing: .04em; pointer-events: none; text-shadow: 0 1px 4px #000; }

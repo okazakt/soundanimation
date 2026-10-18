@@ -8,9 +8,9 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.10">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.11">
   <title>Starlight Bell</title>
-  <script src="./app.js?v=2026.10.18.10" defer></script>
+  <script src="./app.js?v=2026.10.18.11" defer></script>
 </head>
 <body>
   <main id="sky" aria-label="音に反応する光のアニメーション">
@@ -22,6 +22,8 @@
     <p id="notice" role="status" aria-live="polite"></p>
   </main>
   <div id="microphone-controls">
+    <div class="microphone-picker"><label for="microphone-select">入力マイク</label><select id="microphone-select"><option value="">自動／本体マイク設定を使用</option></select><button id="refresh-microphones" type="button">一覧を更新</button></div>
+    <p id="microphone-list-status" role="status" aria-live="polite">一覧の取得にはマイクの許可が必要です</p>
     <label><input id="builtin-microphone" type="checkbox" checked> 本体マイクを指定する</label>
     <p id="microphone-status" role="status" aria-live="polite">マイク停止中</p>
   </div>

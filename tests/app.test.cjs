@@ -16,6 +16,7 @@ function fixture(getMicrophone, options = {}) {
     quadraticCurveTo(...args) { options.curves?.push(args); }
   }, { get(target, key) { return target[key] || (() => gradient); } });
   const node = () => ({ disabled: false, textContent: '', classList: { add() {}, remove() {} },
+    value: '', replaceChildren(...children) { this.children = children; },
     setAttribute() {}, addEventListener(type, fn) { this[type] = fn; }, getContext: () => context,
     getBoundingClientRect: () => ({ width: options.width || 390, height: options.height || 740 }) });
   const stream = { getTracks: () => [{ stop() { stopped++; } }], getAudioTracks: () => [{ addEventListener() {} }] };
@@ -54,6 +55,42 @@ function fixture(getMicrophone, options = {}) {
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('microphone list refresh releases permission input and displays exposed devices', async () => {
+  const f = fixture(async stream => stream, { enumerateDevices: async () => [
+    { kind: 'audioinput', deviceId: 'phone', label: 'iPhone Microphone' },
+    { kind: 'audioinput', deviceId: 'car', label: 'Car Bluetooth' },
+    { kind: 'audiooutput', deviceId: 'speaker', label: 'Speaker' }
+  ] });
+  await f.nodes['#refresh-microphones'].click();
+  assert.equal(f.counts().stopped, 1);
+  assert.equal(f.frames.size, 0);
+  assert.deepEqual(f.nodes['#microphone-select'].children.map(n => n.value), ['', 'phone', 'car']);
+  assert.match(f.nodes['#microphone-list-status'].textContent, /2件/);
+  assert.equal(f.nodes['#start'].disabled, false);
+});
+test('selected microphone starts directly and switching releases the previous input', async () => {
+  const requests = [];
+  const f = fixture(async (stream, constraints) => {
+    requests.push(constraints.audio.deviceId?.exact);
+    return { ...stream, getAudioTracks: () => [{ label: requests.at(-1), getSettings: () => ({ deviceId: requests.at(-1) }), addEventListener() {} }] };
+  });
+  f.nodes['#microphone-select'].value = 'phone';
+  await f.nodes['#start'].click();
+  f.nodes['#microphone-select'].value = 'car';
+  await f.nodes['#microphone-select'].change();
+  assert.deepEqual(requests, ['phone', 'car']);
+  assert.equal(f.counts().stopped, 1);
+  assert.match(f.nodes['#microphone-status'].textContent, /car/);
+  f.nodes['#stop'].click();
+});
+test('selected microphone failure stops instead of opening an automatic input', async () => {
+  const f = fixture(async () => { throw new Error('missing'); });
+  f.nodes['#microphone-select'].value = 'removed';
+  await f.nodes['#start'].click();
+  assert.equal(f.counts().requestCount, 1);
+  assert.equal(f.frames.size, 0);
+  assert.match(f.nodes['#microphone-status'].textContent, /使用できません/);
+});
 test('built-in microphone uses exact device ID and releases permission stream', async () => {
   const requests = [];
   const f = fixture(async (stream, constraints) => {
@@ -146,7 +183,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.10'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.11'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
