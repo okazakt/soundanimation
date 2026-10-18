@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.5';
+  const VERSION = '2026.10.18.6';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -629,22 +629,20 @@
     m.tension = lerp(tension, m.tension, Math.exp(-dt / 5));
     m.confidence = lerp(clamp(mean * 12, .2, 1), m.confidence, Math.exp(-dt / 4));
   }
-  function mixHue(a, b, k) { return (a + (((b - a + 540) % 360) - 180) * k + 360) % 360; }
-  const moodCoolHues = [185, 215, 245, 285], moodWarmHues = [350, 16, 38, 60];
   const moodSpriteHues = [27, 40, 35, 200, 230, 275, 340];
   function particleColour(p, f) {
-    // Four related colours per mood, with continuous individual variation.
-    const cool = moodCoolHues, warm = moodWarmHues;
-    const coordinate = clamp(p.tint * .65 + p.baseTone * .35 + f.colorShift * .12, 0, 1) * 3;
-    const i = Math.min(2, Math.floor(coordinate)), k = coordinate - i;
-    const coldHue = mixHue(cool[i], cool[i + 1], k), warmHue = mixHue(warm[i], warm[i + 1], k);
-    // Individuals cross between palettes at different points. An uncertain
-    // mood retains both warm and cool colours rather than collapsing to pink.
-    let blend = clamp((mood.warmth + (p.tint - .5) * .84 + .16) / .32, 0, 1);
-    blend = blend * blend * (3 - 2 * blend);
-    let hue = mixHue(coldHue, warmHue, blend);
+    // Start with the entire hue circle. Mood gently changes its density,
+    // never selects a palette or excludes a range of colours.
+    const coordinate = p.tint + p.baseTone * .23 + f.id * .093 + f.colorShift * .15 + mood.time * .0015;
+    const baseHue = ((coordinate % 1) + 1) % 1 * 360;
+    const centre = (125 - mood.warmth * 115 + mood.activity * 35 + mood.tension * 65 + mood.keyBias * 25 + 360) % 360;
+    const bias = Math.min(.9, Math.abs(mood.warmth) * .9 * mood.confidence);
+    // With bias < 1 radian this warp stays continuous and one-to-one over
+    // the whole circle: even the least preferred colours remain possible.
+    let hue = baseHue + bias * Math.sin((centre - baseHue) * Math.PI / 180) * 180 / Math.PI;
+    if (p.colorRebel) hue = baseHue + 150 + p.tint * 60;
     const wander = Math.sin(mood.time * .17 + p.colorPhase) * 3;
-    hue = (hue + f.beatHue * .55 + wander + (p.colorRebel ? 130 + p.tint * 70 : 0) + 360) % 360;
+    hue = (hue + f.beatHue * .55 + wander + 720) % 360;
     const saturation = clamp(66 + mood.activity * 20 + (p.tint - .5) * 12 - mood.tension * 5, 45, 92);
     const lightness = clamp(60 + p.strength * 19 - mood.tension * 4 + (p.tint - .5) * 6, 48, 83);
     const spriteHues = moodSpriteHues;

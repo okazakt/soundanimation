@@ -85,7 +85,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.5'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.6'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -472,24 +472,35 @@ test('sustained audible input stays visible after adaptation and during schedule
   assert.ok(f.inspect().flocks.every(g => g.presence < .001));
 });
 
-test('mood colours remain multicoloured, with only a few deliberate exceptions', () => {
+test('mood continuously biases the full hue circle, with rare independent exceptions', () => {
   const f = fixture(async stream => stream, { width: 8, height: 8 });
-  const { mood, flocks } = f.inspect();
+  const { mood, flocks } = f.inspect(); mood.confidence = 1;
   const all = flocks.flatMap(g => g.particles.map(p => ({ p, g })));
   const rebels = all.filter(({ p }) => p.colorRebel);
   assert.ok(rebels.length > 0 && rebels.length < all.length * .035);
-  mood.warmth = 0;
-  const neutral = all.filter(({ p }) => !p.colorRebel).map(({ p, g }) => f.colour(p, g));
-  assert.ok(neutral.filter(c => c.hue < 80 || c.hue > 335).length > neutral.length * .15);
-  assert.ok(neutral.filter(c => c.hue > 175 && c.hue < 265).length > neutral.length * .15);
-  for (const warmth of [-.8, .8]) {
+  const normal = all.filter(({ p }) => !p.colorRebel);
+  for (const warmth of [-1, -.6, -.2, 0, .2, .6, 1]) {
     mood.warmth = warmth;
-    const colours = all.map(({ p, g }) => ({ ...f.colour(p, g), rebel: p.colorRebel }));
-    assert.ok(new Set(colours.map(c => Math.round(c.hue))).size > 80);
-    const ordinary = colours.filter(c => !c.rebel);
-    assert.ok(ordinary.every(c => warmth < 0 ? c.hue > 170 && c.hue < 305 : c.hue > 335 || c.hue < 75));
-    assert.ok(colours.some(c => c.rebel && (warmth < 0 ? c.hue < 170 || c.hue > 305 : c.hue > 75 && c.hue < 335)));
+    const colours = normal.map(({ p, g }) => f.colour(p, g));
+    assert.equal(new Set(colours.map(c => Math.floor(c.hue / 30))).size, 12, 'every hue sector survives every mood');
+    assert.ok(new Set(colours.map(c => Math.round(c.hue))).size > 250);
     assert.ok(colours.every(c => Number.isFinite(c.hue) && c.saturation >= 45 && c.lightness >= 48));
+  }
+  const centre = 125 - 115 + mood.activity * 35 + mood.tension * 65 + mood.keyBias * 25;
+  const near = () => normal.filter(({ p, g }) => Math.abs(((f.colour(p, g).hue - centre + 540) % 360) - 180) < 60).length;
+  mood.warmth = 0; const unbiased = near();
+  mood.warmth = 1; assert.ok(near() > unbiased + normal.length * .1, 'mood changes preference, not availability');
+  const { p, g } = normal[10];
+  let previous;
+  for (let warmth = -1; warmth <= 1; warmth += .01) {
+    mood.warmth = warmth; const hue = f.colour(p, g).hue;
+    if (previous !== undefined) assert.ok(Math.abs(((hue - previous + 540) % 360) - 180) < 4, 'no categorical colour switch');
+    previous = hue;
+  }
+  for (const { p, g } of rebels) {
+    const exception = f.colour(p, g).hue; p.colorRebel = false;
+    const ordinary = f.colour(p, g).hue; p.colorRebel = true;
+    assert.ok(Math.abs(((exception - ordinary + 540) % 360) - 180) > 90);
   }
 });
 test('audio mood responds slowly to contrasting timbres and returns cleanly on restart', () => {
