@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.13';
+  const VERSION = '2026.10.18.14';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -343,7 +343,7 @@
     microphoneButton.disabled = false;
     channels.forEach(s => { s.intensity = 0; });
     resetSignals();
-    intro.classList.remove('hidden'); draw();
+    intro.classList.remove('hidden'); updateDebug(true); draw();
   }
   const energies = new Float64Array(N);
   const rawEnergies = new Float64Array(N);
@@ -386,7 +386,7 @@
       signals[i] = target;
     });
     recordSignals(dt);
-    updateRhythm(dt); updateMood(dt);
+    updateRhythm(dt); updateMood(dt); updateDebug();
     if (mode === 'flocks') {
       updateFlocks(dt);
       environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
@@ -674,12 +674,12 @@
   // Musical mood is a slow, uncertain audio-feature estimate, not a claim
   // about the listener's emotion or the meaning of lyrics.
   const mood = { warmth: 0, activity: .35, tension: .2, confidence: 0,
-    keyBias: 0, time: 0, analysisTime: 0, colourBiasGain: 1, colourStage: 0, colourAge: 0, colourCycle: 0, nextColourRelease: 10, colourOut: 2, colourHold: 2, colourReturn: 3, chroma: new Float64Array(12) };
+    brightness: 0, flatness: 0, keyBias: 0, time: 0, analysisTime: 0, colourBiasGain: 1, colourStage: 0, colourAge: 0, colourCycle: 0, nextColourRelease: 10, colourOut: 2, colourHold: 2, colourReturn: 3, chroma: new Float64Array(12) };
   const majorProfile = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
   const minorProfile = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
   function resetMood() {
     Object.assign(mood, { warmth: 0, activity: .35, tension: .2, confidence: 0,
-      keyBias: 0, time: 0, analysisTime: 0, colourBiasGain: 1, colourStage: 0, colourAge: 0, colourCycle: 0, nextColourRelease: 10, colourOut: 2, colourHold: 2, colourReturn: 3 }); mood.chroma.fill(0);
+      brightness: 0, flatness: 0, keyBias: 0, time: 0, analysisTime: 0, colourBiasGain: 1, colourStage: 0, colourAge: 0, colourCycle: 0, nextColourRelease: 10, colourOut: 2, colourHold: 2, colourReturn: 3 }); mood.chroma.fill(0);
   }
   function tonalScore(profile, root) {
     const mean = mood.chroma.reduce((a, b) => a + b, 0) / 12;
@@ -761,6 +761,8 @@
     const tempo = rhythm.bpm ? clamp((rhythm.bpm - 70) / 100, 0, 1) : .35;
     const activity = clamp(tempo * rhythm.confidence * .55 + rms * 1.6 + rhythm.fluxAverage * 5, 0, 1);
     const flatness = Math.exp(logs / N) / Math.max(.00001, mean);
+    m.brightness = lerp(brightness, m.brightness, Math.exp(-dt / 1));
+    m.flatness = lerp(flatness, m.flatness, Math.exp(-dt / 1));
     const tension = clamp(flatness * .45 + Math.max(0, brightness - .45) * .7 + rhythm.fluxAverage * 4, 0, 1);
     const warmth = clamp((brightness - .48) * 1.35 + m.keyBias * .65 + (activity - .4) * .18, -1, 1);
     m.warmth = lerp(warmth, m.warmth, Math.exp(-dt / 6));
@@ -768,6 +770,34 @@
     m.tension = lerp(tension, m.tension, Math.exp(-dt / 5));
     m.confidence = lerp(clamp(mean * 12, .2, 1), m.confidence, Math.exp(-dt / 4));
   }
+  const debugPanel = document.querySelector('#audio-debug');
+  const debugFields = Object.fromEntries(['input', 'tempo', 'beat', 'onset', 'meter', 'position', 'window', 'mood', 'timbre']
+    .map(key => [key, document.querySelector(`#debug-${key}`)]));
+  let debugLastTime = -Infinity;
+  function updateDebug(force = false) {
+    if (!debugPanel.open && !force) return;
+    const r = rhythm, m = mood;
+    const audible = running && rawEnergies.some(value => value > .015);
+    const locked = audible && r.confidence > .3 && r.bpm > 0;
+    const meterKnown = locked && r.meterConfidence > .5 && r.beatInBar > 0;
+    // Lamps follow the actual beat clock every frame, independently of text refresh.
+    debugFields.beat.setAttribute('style', `opacity:${locked ? .15 + .85 * r.pulse : .15}`);
+    const onsetLight = audible ? Math.exp(-(r.time - r.lastOnset) / .12) : 0;
+    debugFields.onset.setAttribute('style', `opacity:${.15 + .85 * onsetLight}`);
+    if (!force && r.time >= debugLastTime && r.time - debugLastTime < .15) return;
+    debugLastTime = r.time;
+    const pct = value => `${Math.round(clamp(value, 0, 1) * 100)}%`;
+    const set = (key, text) => { if (debugFields[key].textContent !== text) debugFields[key].textContent = text; };
+    set('input', !running ? '停止中' : `${demo ? 'デモ入力' : 'マイク入力'} · ${audible ? '解析中' : '無音／入力待ち'}`);
+    set('tempo', locked ? `${r.bpm.toFixed(1)} BPM / ${(r.bpm / 60).toFixed(2)} BPS · 確かさ ${pct(r.confidence)}` : `— BPM / — BPS · ${audible ? '推定中' : '判定待ち'}`);
+    set('meter', meterKnown ? `${r.meter}拍子系 · 確かさ ${pct(r.meterConfidence)}` : `未確定 · 確かさ ${pct(audible ? r.meterConfidence : 0)}`);
+    set('position', meterKnown ? Array.from({ length: r.meter }, (_, i) => `${i + 1 === r.beatInBar ? '●' : '○'}${i + 1}`).join('  ') : '—');
+    set('window', `直近32拍${locked ? ` ≈ ${(32 * r.period).toFixed(1)}秒` : ''} · 記録 ${r.accents.length}件 · 最低3周期`);
+    const expression = `${m.warmth > .15 ? '明るめ' : m.warmth < -.15 ? '陰影あり' : '中間'}・${m.activity > .55 ? '活発' : m.activity < .3 ? '穏やか' : '中程度の動き'}`;
+    set('mood', audible ? `${expression} · 活動 ${pct(m.activity)} / 緊張 ${pct(m.tension)} / 確かさ ${pct(m.confidence)}` : '—');
+    set('timbre', audible ? `${m.brightness < .35 ? '低域寄り' : m.brightness > .65 ? '高域寄り' : '中域寄り'}・${m.flatness > .45 ? 'ノイズ的' : '倍音的'}（明るさ ${pct(m.brightness)} / 平坦度 ${pct(m.flatness)}）` : '—');
+  }
+  debugPanel.addEventListener('toggle', () => updateDebug(true));
   const moodSpriteHues = [27, 40, 35, 200, 230, 275, 340];
   function particleColour(p, f) {
     // Start with the entire hue circle. Mood gently changes its density,

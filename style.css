@@ -43,3 +43,13 @@ button:not(:disabled):active { background: #c4dcff30; }
 #sky:has(#theme.visible) #intro { opacity: 0; visibility: hidden; transition: none; }
 @media (prefers-reduced-motion: reduce) { #theme { transition: none; transform: none; } }
 @media (max-width: 420px) { footer { padding-left: 14px; padding-right: 14px; gap: 10px; } button { letter-spacing: .1em; } }
+
+#audio-debug { position: absolute; z-index: 2; top: max(30px, calc(env(safe-area-inset-top) + 24px)); left: max(10px, env(safe-area-inset-left)); width: min(370px, calc(100% - 20px)); max-height: min(55dvh, 380px); overflow: auto; border: 1px solid #a9bed638; border-radius: 10px; background: #050714dc; color: #d5dfef; font-size: 11px; line-height: 1.65; }
+#audio-debug summary { cursor: pointer; padding: 8px 12px; min-height: 36px; font-size: 12px; }
+.debug-content { padding: 0 12px 10px; }
+.debug-content p { margin: 0 0 6px; }
+.debug-content dl { display: grid; grid-template-columns: 82px 1fr; gap: 5px 8px; margin: 0; }
+.debug-content dt { color: #95a7c5; }
+.debug-content dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.debug-lamp { color: #a8e8ff; opacity: .15; }
+.debug-note { margin-top: 8px !important; color: #95a7c5; font-size: 10px; }

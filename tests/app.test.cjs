@@ -18,7 +18,7 @@ function fixture(getMicrophone, options = {}) {
   const node = () => ({ disabled: false, textContent: '', classList: { add() {}, remove() {} },
     value: '', open: false, replaceChildren(...children) { this.children = children; },
     showModal() { this.open = true; }, close() { this.open = false; this.closeEvent?.(); },
-    setAttribute() {}, addEventListener(type, fn) { this[type === 'close' ? 'closeEvent' : type] = fn; }, getContext: () => context,
+    attributes: {}, setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(type, fn) { this[type === 'close' ? 'closeEvent' : type] = fn; }, getContext: () => context,
     getBoundingClientRect: () => ({ width: options.width || 390, height: options.height || 740 }) });
   const track = { addEventListener(type, fn) { events['track:' + type] = fn; } };
   const stream = { getTracks: () => [{ stop() { stopped++; } }], getAudioTracks: () => [track] };
@@ -167,7 +167,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.13'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.14'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -786,4 +786,31 @@ test('a returning dispersed flock preserves visible individuals and their bounde
   f.stepScene(values, values, .1);
   assert.ok(Math.hypot(p.x - 45, p.y - 90) <= f.speedLimit() * .1 + 1e-6);
   assert.ok(p.alpha > .6 && !g.exiting, 'the same dispersed individual reforms without fading out');
+});
+
+
+test('debug overlay shows the current beat clock, uncertain meter, mood and acoustic timbre, clearing on stop', async () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  await f.nodes['#start'].click(); await flush(); await f.tick();
+  const { rhythm, mood } = f.inspect();
+  Object.assign(rhythm, { bpm: 120, period: .5, confidence: .8, meter: 3,
+    meterConfidence: .85, beatInBar: 2, pulse: 1, lastOnset: rhythm.time });
+  Object.assign(mood, { brightness: .2, flatness: .1, activity: .7, warmth: .3, confidence: .8 });
+  f.nodes['#audio-debug'].open = true; f.nodes['#audio-debug'].toggle();
+  assert.match(f.nodes['#debug-tempo'].textContent, /120.0 BPM \/ 2.00 BPS/);
+  assert.match(f.nodes['#debug-meter'].textContent, /3拍子系/);
+  assert.match(f.nodes['#debug-position'].textContent, /●2/);
+  assert.match(f.nodes['#debug-window'].textContent, /16.0秒/);
+  assert.match(f.nodes['#debug-mood'].textContent, /活発/);
+  assert.match(f.nodes['#debug-timbre'].textContent, /低域寄り・倍音的/);
+  assert.equal(f.nodes['#debug-beat'].attributes.style, 'opacity:1');
+  assert.equal(f.nodes['#debug-onset'].attributes.style, 'opacity:1');
+  rhythm.meterConfidence = .2; f.nodes['#audio-debug'].toggle();
+  assert.match(f.nodes['#debug-meter'].textContent, /未確定/);
+  assert.equal(f.nodes['#debug-position'].textContent, '—');
+  f.nodes['#stop'].click();
+  assert.equal(f.nodes['#debug-input'].textContent, '停止中');
+  assert.match(f.nodes['#debug-tempo'].textContent, /— BPM/);
+  assert.equal(f.nodes['#debug-timbre'].textContent, '—');
+  assert.equal(f.nodes['#debug-beat'].attributes.style, 'opacity:0.15');
 });
