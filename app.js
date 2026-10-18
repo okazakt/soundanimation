@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.31';
+  const VERSION = '2026.10.18.32';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -741,7 +741,7 @@
     const r = rhythm, m = mood;
     // Brief inter-beat silence must not hide a clock that is still tracking.
     const bridging = running && r.tracking && r.quiet <= Math.max(.6, r.period * 1.4);
-    const audible = running && ((latestInputLevel ? !latestInputLevel.quiet : rawEnergies.some(value => value > .015)) || bridging);
+    const audible = running && (!beatThisClient || window.DanceMotion.rhythmVisible(r)) && ((latestInputLevel ? !latestInputLevel.quiet : rawEnergies.some(value => value > .015)) || bridging);
     const locked = audible && r.tracking && r.confidence > .3 && r.bpm > 0;
     const meterKnown = locked && r.meterConfidence > .5 && r.beatInBar > 0;
     // Lamps follow the actual beat clock every frame, independently of text refresh.
@@ -1081,8 +1081,9 @@
     beatCooldown = Math.max(0, .19 - (rhythm.time - rhythm.lastOnset));
     backgroundTone = lerp(total > .001 ? weighted / total : backgroundTone,
       backgroundTone, Math.exp(-dt / 1.4));
-    backgroundEnergy = lerp(clamp(total / N / .4, 0, 1), backgroundEnergy, Math.exp(-dt / .8));
-    const drives = regionDrives();
+    backgroundEnergy = lerp((!beatThisClient || window.DanceMotion.rhythmVisible(rhythm))?clamp(total / N / .4, 0, 1):0, backgroundEnergy, Math.exp(-dt / .8));
+    const rhythmAllowed=!beatThisClient || window.DanceMotion.rhythmVisible(rhythm);
+    const drives=rhythmAllowed?regionDrives().map(drive=>beatThisClient?Math.max(.1,drive):drive):[0,0,0,0,0];
     updateSoundProfile(dt);
     const candidates = flocks.map(f => ({ id: f.id, score: drives[f.region] * (f.voice ? .7 : 1) }))
       .filter(item => item.score > .025).sort((a, b) => b.score - a.score);
@@ -1382,7 +1383,7 @@
   }
   function drawBeatRadiation() {
     const lock=(focus.breath.gain || 0)*clamp(rhythm.confidence,0,1);
-    if(lock<.02 || !rhythm.tracking || !rhythm.period || rhythm.confidence<.1) return;
+    if(lock<.02 || !rhythm.tracking || !rhythm.period || rhythm.confidence<.1 || (beatThisClient && !window.DanceMotion.rhythmVisible(rhythm))) return;
     const drive=window.DanceMotion.energy(mood), size=Math.min(width,height);
     // Fixed bounded cohorts derived from the compensated beat clock: drawing
     // delay never becomes the start time of a new outward wave.

@@ -26,10 +26,20 @@
       this.stable+=dt;
       if(this.stable>=2) this.meter=candidate;
       const cycle=r.beatCount+clamp(r.phase,0,1);
-      const delta=tracking && this.last!==null ? clamp(cycle-this.last,0,dt/r.period*1.5) : 0;
-      this.last=tracking?cycle:null;
       const previous=Math.floor(this.step);
-      this.step+=delta/this.interval;
+      const trackingStart=tracking && this.last===null;
+      this.last=tracking?cycle:null;
+      if(tracking) {
+        // Follow the compensated clock, including negative phase corrections.
+        // The peak, not the start of the attack, lands on the selected beat.
+        const target=cycle/this.interval+.16;
+        if(trackingStart && this.gain<.01) this.step=target;
+        else {
+          this.step+=dt/r.period/this.interval;
+          const error=((target-this.step+.5)%1+1)%1-.5;
+          this.step+=clamp(error*(1-Math.exp(-dt/.12)),-dt*.6,dt*.6);
+        }
+      }
       if(Math.floor(this.step)!==previous || this.gain<.01) {
         const threshold=this.meter===3?90:150;
         if(r.bpm>threshold+8)this.fast=true;
@@ -56,7 +66,13 @@
     const weight=t*t*(3-2*t);
     return 1+pulse.wave*(pulse.wave>0 ? 1.95+.1*clamp(drive,0,1) : .35)*weight;
   }
-  const api={energy,styles,BreathingPulse,breathingScale};
+  function rhythmVisible(r) {
+    const supportAge=r.time-r.lastSupport;
+    return !!r.tracking && r.confidence>=.35 && r.bpm>=55 && r.bpm<=200 &&
+      supportAge>=-.1 && supportAge<=Math.max(6,r.period*8) &&
+      r.quiet<Math.max(.8,r.period*1.5);
+  }
+  const api={energy,styles,BreathingPulse,breathingScale,rhythmVisible};
   if(typeof module!=='undefined' && module.exports) module.exports=api;
   else root.DanceMotion=api;
 })(typeof self==='undefined'?globalThis:self);

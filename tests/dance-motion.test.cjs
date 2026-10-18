@@ -26,7 +26,7 @@ test('breathing keeps the tempo-dependent beat intervals and grows membership wi
     return pulse;
   };
   const unknown=run(0,120),known=run(4,120);
-  assert.equal(unknown.interval,2);assert.ok(Math.abs(unknown.step-20)<.02);
+  assert.equal(unknown.interval,2);assert.ok(Math.abs(unknown.step-20.16)<.02);
   assert.equal(unknown.participation,2/3);assert.ok(known.participation>.899);
   assert.ok(run(3,120).participation>.899);
   assert.equal(run(4,120,.7).participation,2/3);
@@ -56,4 +56,26 @@ test('breathing reaches three times normal diameter with a short smooth attack a
     const left=size((boundary-1e-5+1)%1),right=size((boundary+1e-5)%1);
     assert.ok(Math.abs(left-right)<1e-6,'no jump at attack, release or cycle boundary');
   }
+});
+
+test('rendering waits for rhythm and rejects silent or unsupported clocks without an absolute volume gate',()=>{
+ const r={tracking:true,confidence:.9,bpm:120,period:.5,time:20,lastSupport:19,quiet:0};
+ assert.equal(Dance.rhythmVisible({...r,tracking:false}),false);
+ assert.equal(Dance.rhythmVisible({...r,lastSupport:10}),false);
+ assert.equal(Dance.rhythmVisible({...r,quiet:2}),false);
+ assert.equal(Dance.rhythmVisible(r),true);
+});
+test('pulse peaks stay aligned to corrected attack clock for minutes without accumulating negative corrections',()=>{
+ const clock=new Dance.BreathingPulse();let maxError=0,peak=0;
+ for(let i=0;i<60*180;i++) {
+  const cycle=i/30 + .07*Math.sin(i/180);
+  const r={tracking:true,confidence:1,bpm:120,period:.5,beatCount:Math.floor(cycle),phase:cycle%1,meter:0,meterConfidence:0};
+  const pulse=clock.update(r,1/60);
+  if(i>600) {
+   const target=cycle/2+.16,error=((pulse.step-target+.5)%1+1)%1-.5;
+   maxError=Math.max(maxError,Math.abs(error));
+   if(Math.abs(cycle-Math.round(cycle/2)*2)<.015) peak=Math.max(peak,Dance.breathingScale(pulse,0,.5));
+  }
+ }
+ assert.ok(maxError<.01);assert.ok(peak>2.98);
 });
