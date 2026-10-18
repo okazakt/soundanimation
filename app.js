@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.25';
+  const VERSION = '2026.10.18.26';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -987,7 +987,7 @@
       active: false, gate: false, pendingGate: null, pendingSince: 0, gateChangedAt: -10, safetyUntil: 0,
       exiting: false, exitStyle: id % 4, trail: [],
       mirrorType: 0, mirrorAlpha: 0, population: 0, colorShift: 0, beatTurn: 0, beatHue: 0,
-      danceX: 0, danceY: 0, danceSwirl: 0, danceAccent: 0, danceSpread: 1, danceEnergy: .5,
+      danceX: 0, danceY: 0, danceSwirl: 0, danceAccent: 0, danceSpread: 1, danceEnergy: .5, danceLock: 0, danceOffsetX: 0, danceOffsetY: 0,
       shape: 0, vx: 0, vy: 0, motionLevel: 0, motionPulse: 0, groove: 0,
       phaseSpeed: (.8 + (id % 5) * .16) * (.55 + hash(id, 0, 8020) * 1.1),
       speedScale: .55 + hash(id, 0, 8020) * 1.1,
@@ -1036,6 +1036,17 @@
   }
   function updateBeatExpression(f, dt) {
     const dance=window.DanceMotion.sample(rhythm,mood,f.id,elapsed);
+    // Build visible participation over several cycles. Avoid another slow physics
+    // filter here: the ambient trajectories already have substantial inertia.
+    const lockTarget=rhythm.tracking ? clamp(rhythm.confidence,0,1) : 0;
+    f.danceLock=lerp(lockTarget,f.danceLock,Math.exp(-dt/(lockTarget>f.danceLock ? Math.max(1.2,rhythm.period*3) : .35)));
+    const amplitude=Math.min(width,height)*(.045+.035*dance.energy)*f.danceLock;
+    const targetX=dance.x*amplitude,targetY=dance.y*amplitude;
+    const offsetX=(targetX-f.danceOffsetX)*(1-Math.exp(-dt/.045));
+    const offsetY=(targetY-f.danceOffsetY)*(1-Math.exp(-dt/.045));
+    const limit=particleSpeedLimit()*.55*dt;
+    const scale=Math.min(1,limit/Math.max(.001,Math.hypot(offsetX,offsetY)));
+    f.danceOffsetX+=offsetX*scale; f.danceOffsetY+=offsetY*scale;
     const stepDecay=Math.exp(-dt/clamp(rhythm.period*.22,.1,.22));
     f.danceEnergy=lerp(dance.energy,f.danceEnergy,Math.exp(-dt/1.2));
     f.danceX=lerp(dance.x,f.danceX,stepDecay);f.danceY=lerp(dance.y,f.danceY,stepDecay);
@@ -1402,6 +1413,37 @@
       from = { ...end, age: control.age };
     }
   }
+  function drawBeatRadiation() {
+    const lock=flocks[0]?.danceLock || 0;
+    if(lock<.02 || !rhythm.period || rhythm.confidence<.1) return;
+    const drive=window.DanceMotion.energy(mood), size=Math.min(width,height);
+    // Fixed bounded cohorts derived from the compensated beat clock: drawing
+    // delay never becomes the start time of a new outward wave.
+    for(let back=0;back<4;back++) {
+      const age=(back+rhythm.phase)*rhythm.period;
+      if(age>1.35 || rhythm.beatCount<back) continue;
+      const meterKnown=rhythm.meterConfidence>.6 && rhythm.beatInBar>0 && (rhythm.meter===3 || rhythm.meter===4);
+      const position=meterKnown ? (rhythm.beatInBar-1-back+rhythm.meter*4)%rhythm.meter : -1;
+      const down=position===0, count=down ? 24 : 7;
+      const attack=clamp(age/.07,0,1);
+      const envelope=attack*attack*(3-2*attack)*(1-age/1.35)**2;
+      const weight=down?1:.42;
+      for(let i=0;i<count;i++) {
+        const angle=i*Math.PI*2/count+(rhythm.beatCount-back)*.47;
+        const variation=.78+.22*Math.sin(i*2.7+rhythm.beatCount-back)**2;
+        const radius=size*(.22+.22*drive)*age*variation;
+        const x=width*.5+Math.cos(angle)*radius, y=height*.5+Math.sin(angle)*radius;
+        const r=(2+(i%4)*.9)*(down?1.2:1);
+        const hue=(i*137.5+mood.warmth*35+rhythm.beatCount*9)%360;
+        ctx.globalAlpha=lock*envelope*weight*(.35+.55*drive);
+        const glow=r*4;
+        ctx.drawImage(glows[i%glows.length][1],x-glow,y-glow,glow*2,glow*2);
+        ctx.fillStyle=`hsl(${hue},80%,78%)`;
+        ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();
+      }
+    }
+    ctx.globalAlpha=1;
+  }
   function drawFlocks() {
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
     const hue=285-backgroundTone*135-mood.warmth*mood.confidence*22+(1-mood.activity)*10;
@@ -1411,6 +1453,7 @@
     ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
     ctx.globalCompositeOperation = 'lighter';
     drawFocusPoints();
+    drawBeatRadiation();
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
       const colour = particleColour(p, f), hue = colour.hue;
@@ -1419,9 +1462,11 @@
       const colorIndex = colour.sprite;
       const copies = [[p.x, p.y, 1]];
       if (f.mirrorAlpha * p.mirrorWeight > .005) copies.push([p.mirrorX, p.mirrorY, f.mirrorAlpha * p.mirrorWeight]);
-      for (const [x, y, opacity] of copies) {
-        const reflectedX = x === p.x ? 1 : (f.mirrorType === 1 || f.mirrorType === 3 ? -1 : 1);
-        const reflectedY = y === p.y ? 1 : (f.mirrorType === 2 || f.mirrorType === 3 ? -1 : 1);
+      for (const [rawX, rawY, opacity] of copies) {
+        const participation=f.exiting ? 1-f.collapse : 1;
+        const x=rawX+f.danceOffsetX*participation, y=rawY+f.danceOffsetY*participation;
+        const reflectedX = rawX === p.x ? 1 : (f.mirrorType === 1 || f.mirrorType === 3 ? -1 : 1);
+        const reflectedY = rawY === p.y ? 1 : (f.mirrorType === 2 || f.mirrorType === 3 ? -1 : 1);
         drawParticleTail(p, x, y, reflectedX, reflectedY, hue, p.alpha * opacity, radius);
         ctx.globalAlpha = p.alpha * opacity * (.25 + p.strength * .4);
         ctx.drawImage(glows[colorIndex][2], x - glow, y - glow, glow * 2, glow * 2);
