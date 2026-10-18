@@ -37,10 +37,11 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm });\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     stepBeatExpression: (flock, dt) => window.stepBeatExpression(flock, dt),
+    finishTransfers: moves => window.finishTransfers(moves),
     async tick(dt = 1 / 60) { now += dt * 1000; const [id, fn] = frames.entries().next().value; frames.delete(id); fn(now); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -79,7 +80,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.1'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.2'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -333,4 +334,34 @@ test('recognised beats bend trajectories and change hue smoothly, fading with co
   rhythm.confidence = 0;
   for (let i = 0; i < 240; i++) f.stepBeatExpression(g, 1 / 60);
   assert.ok(Math.abs(g.beatTurn) < .001 && Math.abs(g.beatHue) < .001);
+});
+
+test('sizes include fine dust and rare large individuals; migration preserves the same particle', () => {
+  const f = fixture(async stream => stream, { width: 8, height: 8 });
+  const groups = f.inspect().flocks, all = groups.flatMap(g => g.particles);
+  const sizes = all.map(p => p.size);
+  assert.ok(Math.min(...sizes) < .25 && Math.max(...sizes) > 9);
+  assert.ok(sizes.filter(s => s < .8).length > all.length * .25);
+  assert.ok(sizes.filter(s => s >= 7).length > 0 && sizes.filter(s => s >= 7).length < all.length * .04);
+  const owner = groups[0], host = groups[1];
+  owner.active = host.active = true; host.population = 64;
+  const particle = owner.particles[0];
+  Object.assign(particle, { x: 2, y: 3, vx: 13, vy: -7, travelState: 2, travelTarget: host.id, size: .3, baseTone: .1 });
+  const before = { x: particle.x, y: particle.y, vx: particle.vx, vy: particle.vy, size: particle.size, baseTone: particle.baseTone };
+  f.finishTransfers([{ owner, particle, host }]);
+  assert.ok(host.particles.includes(particle) && !owner.particles.includes(particle));
+  for (const [key, value] of Object.entries(before)) assert.equal(particle[key], value);
+  assert.equal(particle.travelState, 0);
+  assert.ok(particle.guestUntil > 0);
+  assert.ok(particle.band >= 103 && particle.band < 205);
+  const after = groups.flatMap(g => g.particles);
+  assert.equal(after.length, all.length); assert.equal(new Set(after).size, all.length);
+  assert.ok(groups.every(g => g.particles.length === 128));
+  // A full destination cannot accept another individual or lose the source.
+  host.population = 128;
+  const waiting = owner.particles[1]; waiting.travelState = 2;
+  f.finishTransfers([{ owner, particle: waiting, host }]);
+  assert.ok(owner.particles.includes(waiting));
+  f.nodes['#next-mode'].click();
+  assert.ok(f.inspect().flocks.every(g => g.particles.every(p => p.travelState === 0 && p.guestUntil === 0)));
 });

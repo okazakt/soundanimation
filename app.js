@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.1';
+  const VERSION = '2026.10.18.2';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -517,6 +517,43 @@
   let flocks = [], beatCooldown = 0;
   let backgroundTone = .5, backgroundEnergy = 0;
   const flockRanges = [0, 103, 205, 307, 410, N];
+  function particleSize(q) {
+    if (q < .32) return .18 + .62 * Math.pow(q / .32, 1.4);
+    if (q < .985) return .9 + 3.6 * Math.pow((q - .32) / .665, 1.5);
+    return 7 + 4 * (q - .985) / .015;
+  }
+  function guestSlot(f) {
+    return f.particles.findIndex((p, j) => j >= f.population && p.alpha < .015 &&
+      p.travelState === 0 && p.guestUntil <= elapsed);
+  }
+  function findTravelHost(owner, p) {
+    let best = null, distance = Infinity;
+    for (const f of flocks) {
+      if (f === owner || !f.active || f.exiting || f.presence < .4 || guestSlot(f) < 0) continue;
+      const d = Math.hypot(f.x - p.x, f.y - p.y);
+      if (d < distance) { best = f; distance = d; }
+    }
+    return best;
+  }
+  function finishTransfers(transfers) {
+    for (const { owner, particle: p, host } of transfers) {
+      if (!host.active || host.exiting || owner.exiting) continue;
+      const from = owner.particles.indexOf(p), to = guestSlot(host);
+      if (from < 0 || to < 0 || p.travelState !== 2) continue;
+      // Move the same object, preserving position, velocity, size and colour.
+      // Reuse the host's dormant slot in the source: total allocation is fixed.
+      const spare = host.particles[to];
+      host.particles[to] = p; owner.particles[from] = spare;
+      p.travelState = 0; p.travelTarget = -1; p.travelAge = 0;
+      p.guestUntil = elapsed + 7; p.nextTrip = elapsed + 12 + p.tint * 10;
+      const low = flockRanges[host.region], high = flockRanges[host.region + 1];
+      p.band = low + Math.floor(p.tint * (high - low));
+      Object.assign(spare, { x: owner.x, y: owner.y, vx: owner.vx, vy: owner.vy,
+        alpha: 0, strength: 0, travelState: 0, travelTarget: -1, travelAge: 0,
+        guestUntil: 0, nextTrip: elapsed + 10 + spare.tint * 12,
+        band: flockRanges[owner.region] + Math.floor(spare.tint * (flockRanges[owner.region + 1] - flockRanges[owner.region])) });
+    }
+  }
   function prepareFlocks() {
     beatCooldown = 0;
     backgroundTone = .5; backgroundEnergy = 0;
@@ -537,7 +574,10 @@
         band: flockRanges[id % 5] + Math.floor(hash(id, j, 8005) * (flockRanges[id % 5 + 1] - flockRanges[id % 5])),
         angle: j * 2.3999632297, distance: Math.sqrt(hash(id, j, 8010)),
         tint: hash(id, j, 8021), mirrorX: width / 2, mirrorY: height / 2, mvx: 0, mvy: 0,
-        size: .65 + Math.pow(hash(id, j, 8012), 2.4) * 4.8,
+        size: particleSize(hash(id, j, 8012)),
+        travelState: 0, travelTarget: -1, travelAge: 0, guestUntil: 0, mirrorWeight: 1,
+        nextTrip: 4 + hash(id, j, 8030) * 15, driftAngle: 0,
+        baseTone: (flockRanges[id % 5] + hash(id, j, 8005) * (flockRanges[id % 5 + 1] - flockRanges[id % 5])) / (N - 1),
         x: width * (.2 + .6 * hash(id, 0, 8001)),
         y: height * (.2 + .6 * hash(id, 0, 8002)), alpha: 0, strength: 0, vx: 0, vy: 0
       }))
@@ -566,6 +606,7 @@
     f.beatHue = lerp(hue, f.beatHue, Math.exp(-dt / clamp(rhythm.period * .24, .12, .24)));
   }
   function updateFlocks(dt) {
+    const transfers = [];
     let total = 0, weighted = 0;
     for (let i = 0; i < N; i++) {
       total += energies[i]; weighted += energies[i] * i / (N - 1);
@@ -596,7 +637,8 @@
           f.particles.forEach(p => { const r = Math.min(width, height) * .12 * p.distance;
             p.x = f.x + Math.cos(p.angle) * r; p.y = f.y + Math.sin(p.angle) * r;
             p.vx = Math.cos(p.angle + Math.PI / 2) * 35;
-            p.vy = Math.sin(p.angle + Math.PI / 2) * 35; p.alpha = 0; });
+            p.vy = Math.sin(p.angle + Math.PI / 2) * 35; p.alpha = 0;
+            p.travelState = 0; p.travelTarget = -1; p.guestUntil = 0; });
         }
         f.episode++;
         f.exitStyle = (f.id + f.episode - 1) % 4;
@@ -661,7 +703,7 @@
       const radius = Math.min(width, height) * (.10 + f.motionLevel * .20) * f.scale *
         (1 + f.motionPulse * .5 + f.groove * .18) * (.8 + .2 * Math.sin(t * .4 + f.id));
       const count = f.exiting ? f.exitPopulation : Math.round(16 + f.level * (64 + 48 * (.5 + .5 * Math.sin(t * .24 + f.id))));
-      f.population = count;
+      f.population = count; f.radius = radius;
       const symmetryChoice = Math.floor(hash(f.id, Math.floor(phrase), 8022) * 7);
       const symmetry = symmetryChoice < 4 ? 0 : symmetryChoice - 3;
       if (symmetry !== f.mirrorType && f.mirrorAlpha < .03) f.mirrorType = symmetry;
@@ -671,17 +713,46 @@
       // not depend on particle iteration order. A grid bounds mobile CPU cost.
       const cellSize = Math.max(18, Math.min(width, height) * .085);
       const cells = new Map();
-      const members = f.particles.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, alpha: p.alpha }));
+      const members = f.particles.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, alpha: p.alpha, travelling: p.travelState !== 0, guest: p.guestUntil > elapsed }));
       members.forEach((p, j) => {
-        if (j >= count && p.alpha < .05) return;
+        if (p.travelling || (j >= count && !p.guest && p.alpha < .05)) return;
         const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)}`;
         if (!cells.has(key)) cells.set(key, []);
         cells.get(key).push(j);
       });
       f.particles.forEach((p, j) => {
         p.strength = lerp(clamp(energies[p.band] / Math.max(.06, environment), 0, 1), p.strength, Math.exp(-dt / .12));
-        p.alpha = lerp(j < count ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
-        if (j >= count && p.alpha < .005 && !f.exiting) return;
+        p.alpha = lerp(j < count || p.guestUntil > elapsed || p.travelState ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
+        p.baseTone = lerp(p.band / (N - 1), p.baseTone, Math.exp(-dt / 1.4));
+        p.mirrorWeight = lerp(p.travelState ? 0 : 1, p.mirrorWeight, Math.exp(-dt / .35));
+        if (j >= count && p.alpha < .005 && !f.exiting && !p.travelState) return;
+        if (f.exiting) { p.travelState = 0; p.travelTarget = -1; }
+        if (!p.travelState && p.size < .85 && p.alpha > .4 && f.active && !f.exiting &&
+          elapsed > p.nextTrip && f.particles.filter(q => q.travelState).length < 2 && findTravelHost(f, p)) {
+          p.travelState = 1; p.travelAge = 0;
+          p.driftAngle = Math.atan2(p.y - f.y, p.x - f.x) + (p.tint - .5) * .7;
+        }
+        if (p.travelState) {
+          p.travelAge += dt;
+          if (p.travelState === 1 && p.travelAge > 1 + p.tint) {
+            const host = findTravelHost(f, p);
+            p.travelTarget = host ? host.id : f.id; p.travelState = 2;
+          }
+          if (p.travelState === 2) {
+            let host = flocks[p.travelTarget];
+            if (!host?.active || host.exiting) {
+              host = findTravelHost(f, p) || f; p.travelTarget = host.id;
+            }
+            if (Math.hypot(p.x - host.x, p.y - host.y) < Math.max(24, (host.radius || 40) * .65)) {
+              if (host === f) {
+                p.travelState = 0; p.travelTarget = -1; p.nextTrip = elapsed + 12;
+              } else transfers.push({ owner: f, particle: p, host });
+            }
+            // A destination may disappear; never leave a particle stranded.
+            if (p.travelAge > 8) { p.travelTarget = f.id; }
+            if (p.travelAge > 12) { p.travelState = 0; p.nextTrip = elapsed + 12; }
+          }
+        }
         let alignX = 0, alignY = 0, repelX = 0, repelY = 0, neighbours = 0;
         const cellX = Math.floor(p.x / cellSize), cellY = Math.floor(p.y / cellSize);
         for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) {
@@ -743,6 +814,16 @@
         let flowY = f.vy + localX * Math.sin(bend) + localY * Math.cos(bend);
         if (neighbours) { flowX = lerp(flowX, alignX, .16); flowY = lerp(flowY, alignY, .16); }
         flowX += repelX * 70; flowY += repelY * 70;
+        if (p.travelState === 1) {
+          flowX = p.vx * .4 + f.vx * .3 + Math.cos(p.driftAngle) * speed * 1.5;
+          flowY = p.vy * .4 + f.vy * .3 + Math.sin(p.driftAngle) * speed * 1.5;
+        } else if (p.travelState === 2) {
+          const host = flocks[p.travelTarget];
+          const dx = host.x - p.x, dy = host.y - p.y, d = Math.max(1, Math.hypot(dx, dy));
+          const travelSpeed = Math.min(180, d * 1.6);
+          flowX = host.vx + dx / d * travelSpeed;
+          flowY = host.vy + dy / d * travelSpeed;
+        }
         const steps = Math.max(1, Math.ceil(dt * 120)), h = dt / steps;
         for (let step = 0; step < steps; step++) {
           let vx = flowX, vy = flowY;
@@ -772,6 +853,7 @@
         springAxis(p, 'mirrorY', 'mvy', my, 10, dt);
       });
     }
+    finishTransfers(transfers);
   }
   function drawFlocks() {
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
@@ -783,13 +865,13 @@
     ctx.globalCompositeOperation = 'lighter';
     for (const f of flocks) for (const p of f.particles) {
       if (p.alpha < .005) continue;
-      const tone = clamp(p.band / (N - 1) + (p.tint - .5) * .28 + f.colorShift + p.strength * .07, 0, 1);
+      const tone = clamp(p.baseTone + (p.tint - .5) * .28 + f.colorShift + p.strength * .07, 0, 1);
       const hue = (32 + tone * 270 + f.beatHue + 360) % 360;
       const radius = p.size * (.8 + p.strength * 1.15 + f.pulse * .65) * (1 - f.collapse * .65);
       const glow = 12 + radius * 3;
       const colorIndex = Math.round(clamp(tone + f.beatHue / 270, 0, 1) * (glows.length - 1));
       const copies = [[p.x, p.y, 1]];
-      if (f.mirrorAlpha > .005) copies.push([p.mirrorX, p.mirrorY, f.mirrorAlpha]);
+      if (f.mirrorAlpha * p.mirrorWeight > .005) copies.push([p.mirrorX, p.mirrorY, f.mirrorAlpha * p.mirrorWeight]);
       for (const [x, y, opacity] of copies) {
         const reflectedX = x === p.x ? 1 : (f.mirrorType === 1 || f.mirrorType === 3 ? -1 : 1);
         const reflectedY = y === p.y ? 1 : (f.mirrorType === 2 || f.mirrorType === 3 ? -1 : 1);
