@@ -52,7 +52,7 @@ function synthesize(file, meter) {
         const requested = []; page.on('request', request => requested.push(request.url()));
         const errors = []; page.on('pageerror', error => errors.push(error.message));
         await page.goto(url);
-        assert.ok(!requested.some(u => u.endsWith('.onnx') || u.endsWith('.wasm')), 'large AI assets must be lazy');
+        await page.waitForFunction(() => window.ModelSetup?.complete, null, { timeout: 30000 });
         await page.selectOption('#analysis-engine', 'beat-this'); await page.click('#start');
         page.on('console', msg => { if (msg.type() === 'error') console.log('BROWSER', msg.text()); });
         log = setInterval(async () => { try { console.log(await page.evaluate(() => ({ status: window.beatNetTest().beatNetStatus, state: window.beatNetTest().beatNetState && { bpm: window.beatNetTest().beatNetState.bpm, meter: window.beatNetTest().beatNetState.meter, processingMs: window.beatNetTest().beatNetState.processingMs }, active: window.beatNetTest().aiActive }))); } catch {} }, 5000);

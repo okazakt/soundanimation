@@ -42,7 +42,11 @@ function synthesize(file, meter) {
       if (file.endsWith('/app.js')) data = data.toString().replace('  resize();\n  if', `  window.beatNetTest = () => ({ rhythm, beatNetState, beatNetStatus, aiActive, beatThisStorageStatus });
   window.injectInputGap = () => beatNetClient.worker.postMessage({ type: 'pcm', pcm: new Float32Array(2048), audioTime: audio.currentTime + 2, rate: audio.sampleRate });
   resize();\n  if`);
-      res.end(data);
+      if (/\.(onnx|wasm)$/.test(file)) {
+        let offset = 0;
+        const send = () => { if (res.destroyed) return; if (offset >= data.length) return res.end(); res.write(data.subarray(offset, offset + 262144)); offset += 262144; setTimeout(send, 10); };
+        send();
+      } else res.end(data);
     } catch { res.writeHead(404); res.end(); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -52,6 +56,10 @@ function synthesize(file, meter) {
   let log;
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'allow' });
+    await context.addInitScript(() => {
+      window.microphoneRequests = 0; const get = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = (...args) => { window.microphoneRequests++; return get(...args); };
+    });
     const page = await context.newPage(), errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', msg => { if (msg.type() === 'error') console.log('BROWSER', msg.text()); });
@@ -59,14 +67,23 @@ function synthesize(file, meter) {
     await page.goto(`http://127.0.0.1:${server.address().port}/soundanimation/`);
     await page.evaluate(() => navigator.serviceWorker.ready);
     await page.waitForFunction(() => !!navigator.serviceWorker.controller);
-    assert.equal(counts.size, 0, 'no eager large-asset download on installation');
+    await page.waitForFunction(() => window.ModelSetup?.phase === 'downloading' && window.ModelSetup.percent > 5 && window.ModelSetup.percent < 95);
+    assert.equal(await page.locator('#start').isDisabled(), true);
+    assert.equal(await page.evaluate(() => document.querySelector('#app-shell').inert), true);
+    assert.equal(await page.evaluate(() => window.microphoneRequests), 0);
+    await page.screenshot({ path: '/tmp/beat-this-v19-setup.png' });
+    await page.waitForFunction(() => window.ModelSetup?.complete, null, { timeout: 60000 });
+    assert.equal(await page.evaluate(() => window.microphoneRequests), 0);
+    console.log('PASS page view streams percentage and blocks operations before microphone access');
     await page.selectOption('#analysis-engine', 'beat-this'); await page.click('#start');
     await page.waitForFunction(() => window.beatNetTest().beatNetState?.time >= 8, null, { timeout: 60000 });
     await page.waitForFunction(() => window.beatNetTest().beatThisStorageStatus.includes('保存済み'));
     for (const name of ['beat-this.onnx', 'beat-this.mjs', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm']) assert.equal(counts.get(name), 1, name);
     const downloaded = [...counts];
-    console.log('PASS first selected use persists model and all runtime assets', downloaded);
+    console.log('PASS page setup persists model and all runtime assets once', downloaded);
     await page.click('#stop'); await context.setOffline(true); await page.reload();
+    await page.waitForFunction(() => window.ModelSetup?.complete, null, { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.microphoneRequests), 0);
     await page.selectOption('#analysis-engine', 'beat-this'); await page.click('#start');
     await page.waitForFunction(() => window.beatNetTest().beatNetState?.time >= 8, null, { timeout: 60000 });
     await page.waitForFunction(() => window.beatNetTest().beatThisStorageStatus.includes('保存済み'));
@@ -78,7 +95,7 @@ function synthesize(file, meter) {
     await page.waitForFunction(() => window.beatNetTest().beatNetState?.resyncCount >= 1, null, { timeout: 45000 });
     assert.deepEqual([...counts], downloaded);
     assert.deepEqual(errors, []);
-    await page.screenshot({ path: '/tmp/beat-this-v18-pwa.png' });
+    await page.screenshot({ path: '/tmp/beat-this-v19-pwa.png' });
     console.log('PASS input gap invalidates phase, then inference recovers without reload or model download');
     await page.click('#stop');
   } finally { clearInterval(log); await browser.close(); server.close(); fs.rmSync(temporary, { recursive: true, force: true }); }

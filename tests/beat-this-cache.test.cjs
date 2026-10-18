@@ -30,7 +30,7 @@ function fixture() {
   };
   return { boot, stores, fetched, installed, removed, setOffline: value => offline = value, setQuota: value => quota = value, setStatus: value => status = value };
 }
-test('AI assets are lazy, persist across shell upgrades, and serve offline with zero repeated downloads', async () => {
+test('AI cache stays independent of shell installation, survives upgrades, and serves offline without repeated downloads', async () => {
   const f = fixture(), first = f.boot();
   await new Promise(resolve => first.events.install({ waitUntil: p => p.then(resolve) }));
   assert.ok(f.installed.every(path => !path.endsWith('.onnx') && !path.endsWith('.wasm')));
@@ -38,7 +38,7 @@ test('AI assets are lazy, persist across shell upgrades, and serve offline with 
   assert.equal(f.fetched.length, 4);
   await f.boot().get(files[0]); assert.equal(f.fetched.length, 4, 'reload must use persisted model without fetching');
   f.stores.set('sensor-cache', new Map()); f.stores.set('starlight-bell-soundanimation-v0', new Map());
-  const upgrade = f.boot(code.replaceAll('2026.10.18.18', '2026.10.18.19'));
+  const upgrade = f.boot(code.replaceAll('2026.10.18.19', '2026.10.18.20'));
   await new Promise(resolve => upgrade.events.activate({ waitUntil: p => p.then(resolve) }));
   assert.equal(upgrade.claims(), 1); assert.ok(f.stores.has(modelCache)); assert.ok(f.stores.has('sensor-cache'));
   assert.ok(f.removed.includes('starlight-bell-soundanimation-v0')); assert.ok(!f.removed.includes(modelCache));

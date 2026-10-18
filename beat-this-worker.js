@@ -1,7 +1,8 @@
 // MIT-licensed Beat This! browser port. See vendor/beat-this/NOTICE.md.
 import { createBeatThis } from './vendor/beat-this/beat-this.mjs';
-import './beatnet-core.js?v=2026.10.18.18';
-import './beat-this-rhythm.js?v=2026.10.18.18';
+import './beatnet-core.js?v=2026.10.18.19';
+import './beat-this-rhythm.js?v=2026.10.18.19';
+import './model-assets.js?v=2026.10.18.19';
 const RATE = 22050, CAPACITY = RATE * 16;
 let tracker, resampler, ring = new Float32Array(CAPACITY), written = 0, total = 0;
 let inputRate = RATE, inputSamples = 0, expectedInputTime = null, timeline = 0, resyncCount = 0;
@@ -10,12 +11,19 @@ const status = message => self.postMessage({ type: 'status', message });
 async function load(rate) {
   inputRate = rate;
   resampler = new self.BeatNetCore.Resampler(rate);
-  status('モデル読込中（83MB＋実行環境27MB・初回は時間がかかります）');
+  status('モデル読込 0%');
   const response = await fetch('./vendor/beat-this/beat-this.onnx');
   if (!response.ok) throw new Error(`モデル読込失敗 (${response.status})`);
-  const bytes = await response.arrayBuffer();
-  const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
-  if (bytes.byteLength !== 83008106 || hash !== '5d8a94ce99fb33a6b26df6f6d8076decd52b8fd9439e3206d9b8bcdb1c2881bd') {
+  let bytes, previous = -1;
+  try {
+    bytes = await self.ModelAssets.read(response, 83008106, received => {
+      const percent = Math.floor(received / 83008106 * 100);
+      if (percent !== previous) { previous = percent; status(`モデル読込 ${percent}%`); }
+    });
+    status('モデル読込 100%・内容を確認中');
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
+    if (hash !== '5d8a94ce99fb33a6b26df6f6d8076decd52b8fd9439e3206d9b8bcdb1c2881bd') throw new Error('Invalid model');
+  } catch {
     // A bad successful HTTP response must not become a permanent cached error.
     try {
       const cache = await caches.open('starlight-bell-soundanimation-beat-this-final0-ort-1.23.2-v1');
@@ -27,10 +35,10 @@ async function load(rate) {
   try {
     try {
       if (navigator.gpu && await navigator.gpu.requestAdapter()) {
-        status('GPUでモデルを準備中'); tracker = await createBeatThis({ modelUrl, wasmPaths, executionProvider: 'webgpu' }); provider = 'webgpu';
+        status('モデル読込 100%・GPUでAIを準備中'); tracker = await createBeatThis({ modelUrl, wasmPaths, executionProvider: 'webgpu' }); provider = 'webgpu';
       }
-    } catch { status('GPUを利用できないためCPUで準備中'); }
-    if (!tracker) { status('CPUでモデルを準備中'); tracker = await createBeatThis({ modelUrl, wasmPaths, executionProvider: 'wasm' }); }
+    } catch { status('モデル読込 100%・GPUを利用できないためCPUで準備中'); }
+    if (!tracker) { status('モデル読込 100%・CPUでAIを準備中'); tracker = await createBeatThis({ modelUrl, wasmPaths, executionProvider: 'wasm' }); }
   } finally { URL.revokeObjectURL(modelUrl); }
   self.postMessage({ type: 'ready', provider });
 }

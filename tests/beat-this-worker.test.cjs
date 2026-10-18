@@ -7,7 +7,7 @@ const core = require('../beatnet-core.js');
 const empty = () => ({ beats: [], downbeats: [], beatConfidence: [], downbeatConfidence: [] });
 function fixture(analyze) {
   const timers = new Map(), messages = [], windows = []; let next = 0;
-  const self = { location: { href: 'https://example.test/app/beat-this-worker.js' }, BeatNetCore: core, BeatThisRhythm: { summarize }, postMessage: m => messages.push(m) };
+  const self = { location: { href: 'https://example.test/app/beat-this-worker.js' }, BeatNetCore: core, ModelAssets: require('../model-assets.js'), BeatThisRhythm: { summarize }, postMessage: m => messages.push(m) };
   const fakeTracker = { async analyze(pcm) { windows.push(pcm); return analyze ? analyze(pcm) : empty(); } };
   const code = fs.readFileSync(require.resolve('../beat-this-worker.js'), 'utf8').replace(/^import .*;$/gm, '') + '\ntracker = fakeTracker; resampler = new self.BeatNetCore.Resampler(inputRate);';
   vm.runInNewContext(code, { self, fakeTracker, Float32Array, URL, performance: { now: () => 0 }, setTimeout: fn => { timers.set(++next, fn); return next; }, clearTimeout: id => timers.delete(id) });
@@ -59,7 +59,7 @@ test('in-flight results from before a gap are discarded; capture-rate changes re
 });
 test('invalid model bytes are evicted so a bad cached download cannot fail permanently', async () => {
   const deleted = [], messages = [];
-  const self = { location: { href: 'https://example.test/app/beat-this-worker.js' }, BeatNetCore: core, postMessage: m => messages.push(m) };
+  const self = { location: { href: 'https://example.test/app/beat-this-worker.js' }, BeatNetCore: core, ModelAssets: require('../model-assets.js'), postMessage: m => messages.push(m) };
   const code = fs.readFileSync(require.resolve('../beat-this-worker.js'), 'utf8').replace(/^import .*;$/gm, '');
   vm.runInNewContext(code, { self, Float32Array, Uint8Array, URL, fetch: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(5) }),
     crypto: { subtle: { digest: async () => new ArrayBuffer(32) } }, caches: { async open() { return { async delete(url) { deleted.push(url); } }; } } });

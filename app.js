@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.18';
+  const VERSION = '2026.10.18.19';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -15,7 +15,9 @@
   const microphonePrompt = document.querySelector('#microphone-prompt');
   const engineSelect = document.querySelector('#analysis-engine');
   let beatNetClient = null, beatNetState = null, beatNetStatus = '開始するとBeatNetを準備します';
-  let beatThisStorageStatus = 'Beat This!は初回利用時に端末へ保存';
+  const setupComplete = () => !window.ModelSetup || window.ModelSetup.complete;
+  if (!setupComplete()) startButton.disabled = true;
+  let beatThisStorageStatus = window.ModelSetup?.complete ? '端末に保存済み・再読み込み後も再利用' : 'Beat This!の保存状態を確認中';
   let aiActive = false, aiLastTick = -100, aiMotionScale = 1, aiMotionLimit = 1;
   const isBeatThis = () => engineSelect.value === 'beat-this';
   const aiLabel = () => isBeatThis() ? 'Beat This!' : 'BeatNet';
@@ -97,6 +99,7 @@
     microphonePrompt.textContent = microphonePickerReason + (choices.length ? '使用するマイクを選んでください。' : '利用できるマイクがありません。接続してから開き直してください。');
   }
   async function openMicrophonePicker(requestPermission = true, reason = '') {
+    if (!setupComplete()) return;
     const token = ++pickerGeneration;
     microphonePickerReason = reason;
     let permissionStream;
@@ -328,6 +331,7 @@
     });
   }
   async function start() {
+    if (!setupComplete()) return;
     if (running || starting) return;
     if (selectionRequired) return openMicrophonePicker();
     const token = ++generation;
@@ -400,7 +404,7 @@
     audio = null; analyser = null; bins = null;
     if (wake) { wake.release().catch(() => {}); wake = null; }
     clearTimeout(noticeTimer); notice.classList.remove('visible');
-    startButton.disabled = selectionRequired; startButton.textContent = '開始'; stopButton.disabled = true;
+    startButton.disabled = selectionRequired || !setupComplete(); startButton.textContent = '開始'; stopButton.disabled = true;
     microphoneButton.disabled = false;
     channels.forEach(s => { s.intensity = 0; });
     resetSignals();
@@ -1767,6 +1771,10 @@
       audio?.resume().catch(() => message('音声を再開できませんでした。「終了」の後に「開始」を押してください。'));
       acquireWake(); frameId = requestAnimationFrame(frame);
     }
+  });
+  window.addEventListener('model-setup-state', () => {
+    beatThisStorageStatus = setupComplete() ? '端末に保存済み・再読み込み後も再利用' : '初回データを準備中';
+    startButton.disabled = !setupComplete() || running || starting || selectionRequired; updateDebug(true);
   });
   window.addEventListener('pagehide', stop);
   resize();

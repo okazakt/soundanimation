@@ -1,6 +1,6 @@
 /* BeatNet JavaScript adaptation, CC BY 4.0. See vendor/beatnet/NOTICE.md. */
 'use strict';
-importScripts('./beatnet-core.js?v=2026.10.18.18');
+importScripts('./beatnet-core.js?v=2026.10.18.19');
 let assets = null, pipeline = null, epoch = 0;
 async function load() {
   const get = async path => { const r = await fetch(new URL(path, self.location.href)); if (!r.ok) throw new Error(`BeatNetの読込に失敗しました (${r.status})`); return r; };

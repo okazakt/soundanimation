@@ -38,7 +38,7 @@ function fixture(getMicrophone, options = {}) {
     assert.equal(constraints.audio.noiseSuppression, false);
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
-  const window = { BeatNetClient: options.beatNetClient, BeatThisClient: options.beatThisClient, AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
+  const window = { BeatNetClient: options.beatNetClient, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: 2, addEventListener(type, fn) { events[type] = fn; } };
   // Reproducible visual variation keeps coverage independent of session RNG.
   let randomState = options.randomSeed ?? 0x12345678;
   const deterministicMath = Object.create(Math);
@@ -175,13 +175,13 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.18'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.19'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
   assert.deepEqual(deleted, ['starlight-bell-soundanimation-v0']);
   await new Promise(resolve => events.install({ waitUntil: p => p.then(resolve) }));
-  assert.equal(cached.length, 21);
+  assert.equal(cached.length, 24);
   assert.ok(cached.some(url => url.endsWith('/vendor/beatnet/model-1.f32')));
   assert.ok(cached.every(url => url.startsWith('https://example.com/soundanimation/')));
   for (const url of ['https://example.com/', 'https://example.com/script.js', 'https://other.test/soundanimation/app.js', 'https://example.com/soundanimation/unknown']) {
@@ -1092,4 +1092,14 @@ test('Beat This uses delayed estimates between updates, then expires them and ca
   assert.ok(clients[0].stopped); clients[0].emit({ bpm: 200 });
   assert.equal(f.inspect().beatNetState, null);
   f.nodes['#stop'].click();
+});
+
+test('page setup blocks microphone access and start until model preparation completes', async () => {
+  const setup = { complete: false }, f = fixture(async stream => stream, { modelSetup: setup });
+  assert.equal(f.nodes['#start'].disabled, true);
+  await f.nodes['#start'].click(); await f.nodes['#choose-microphone'].click();
+  assert.equal(f.counts().requestCount, 0);
+  setup.complete = true; f.events['model-setup-state']();
+  assert.equal(f.nodes['#start'].disabled, false);
+  await f.nodes['#start'].click(); assert.equal(f.counts().requestCount, 1); f.nodes['#stop'].click();
 });

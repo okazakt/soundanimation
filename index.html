@@ -8,13 +8,28 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.18.18">
+  <link rel="stylesheet" href="./style.css?v=2026.10.18.19">
   <title>Starlight Bell</title>
-  <script src="./beatnet-client.js?v=2026.10.18.18" defer></script>
-  <script src="./beat-this-client.js?v=2026.10.18.18" defer></script>
-  <script src="./app.js?v=2026.10.18.18" defer></script>
+  <script src="./model-setup.js?v=2026.10.18.19" defer></script>
+  <script src="./beatnet-client.js?v=2026.10.18.19" defer></script>
+  <script src="./beat-this-client.js?v=2026.10.18.19" defer></script>
+  <script src="./app.js?v=2026.10.18.19" defer></script>
 </head>
 <body>
+  <section id="model-setup" aria-labelledby="setup-title" aria-busy="true">
+    <div class="setup-card">
+      <p class="eyebrow">STARLIGHT BELL</p>
+      <h1 id="setup-title">音を迎える準備</h1>
+      <p id="setup-phase" role="status" aria-live="polite">保存済みデータを確認しています</p>
+      <strong id="setup-percent">確認中</strong>
+      <progress id="setup-progress" max="100" aria-label="モデルのダウンロード進捗"></progress>
+      <p id="setup-amount"></p>
+      <p id="setup-detail">初回は約110MBを取得して端末に保存します。準備が完了すると操作できます。</p>
+      <button id="setup-retry" type="button" hidden>再試行</button>
+      <p class="setup-note">2回目以降は、保存済みデータを再利用します。</p>
+    </div>
+  </section>
+  <div id="app-shell" hidden inert>
   <main id="sky" aria-label="音に反応する光のアニメーション">
     <canvas id="canvas" aria-label="周波数とリズムに合わせて動く光の球の群れ"></canvas>
     <canvas id="lane-transition" aria-hidden="true"></canvas>
@@ -26,7 +41,7 @@
         <p id="debug-input">停止中</p>
         <dl>
           <dt>解析器</dt><dd id="debug-engine">BeatNet準備待ち</dd>
-          <dt>AIモデル保存</dt><dd id="debug-model-storage">Beat This!は初回利用時に端末へ保存</dd>
+          <dt>AIモデル保存</dt><dd id="debug-model-storage">Beat This!の保存状態を確認中</dd>
           <dt>AIの反応</dt><dd id="debug-ai">—</dd>
           <dt>比較・従来</dt><dd id="debug-comparison">—</dd>
           <dt>テンポ</dt><dd id="debug-tempo">— BPM / — BPS</dd>
@@ -47,7 +62,7 @@
   </main>
   <div id="analysis-controls">
     <label for="analysis-engine">解析方式</label>
-    <select id="analysis-engine"><option value="beatnet" selected>BeatNet AI（試験）</option><option value="beat-this">Beat This! AI（試験・初回約110MB）</option><option value="basic">従来方式</option></select>
+    <select id="analysis-engine"><option value="beatnet" selected>BeatNet AI（試験）</option><option value="beat-this">Beat This! AI（試験）</option><option value="basic">従来方式</option></select>
     <a href="./licenses.html" target="_blank" rel="noopener">帰属・ライセンス</a>
   </div>
   <div id="microphone-controls">
@@ -62,10 +77,11 @@
   </dialog>
   <footer aria-label="観測の操作">
     <button id="previous-mode" class="mode-arrow" type="button" aria-label="前のアニメーション：星空"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
-    <button id="start" type="button">開始</button>
+    <button id="start" type="button" disabled>開始</button>
     <button id="stop" type="button" disabled>終了</button>
     <button id="next-mode" class="mode-arrow" type="button" aria-label="次のアニメーション：星空"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg></button>
   </footer>
+  </div>
 </body>
 </html>
 
