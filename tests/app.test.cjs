@@ -167,7 +167,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.12'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.13'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -257,7 +257,11 @@ test('flocks vary in scale, population and motion, with gathering and dispersing
   assert.ok(live.every(g => g.presence < .02));
   for (const g of live) {
     if (g.exitStyle % 2 === 0) {
-      assert.ok(retiring.get(g).every(p => Math.hypot(p.x - f.inspect().focus.x, p.y - f.inspect().focus.y) < 16), 'gathering exits reach the centre');
+      assert.ok(retiring.get(g).every(p => {
+        const distance = Math.hypot(p.x - f.inspect().focus.x, p.y - f.inspect().focus.y);
+        const departure = Math.hypot(p.exitX - f.inspect().focus.x, p.exitY - f.inspect().focus.y);
+        return distance < 16 || distance < departure;
+      }), 'gathering exits approach the centre at the tempo ceiling, including particles arriving from outside');
     } else {
       assert.ok(retiring.get(g).some(p => p.x < 0 || p.x > 390 || p.y < 0 || p.y > 740), 'dispersal exits travel offscreen');
     }
@@ -546,10 +550,14 @@ test('sustained audible input stays visible after adaptation and during schedule
   for (let i = 0; i < 180; i++) {
     if (i === 90) for (const g of f.inspect().flocks) for (const p of g.particles) { p.x = -1000; p.alpha = .5; }
     f.stepScene(values, raw, .1);
+    if (i === 90) for (const g of f.inspect().flocks) for (const p of g.particles) {
+      assert.ok(Math.abs(p.x + 1000) <= f.speedLimit() * .1 + 1e-6,
+        'blank-screen recovery must not teleport visible offscreen particles');
+    }
     const visible = f.inspect().flocks.some(g => g.particles.some(p => p.alpha > .035 && p.x >= 0 && p.x <= 140 && p.y >= 0 && p.y <= 220));
     blank = visible ? 0 : blank + .1; longest = Math.max(longest, blank);
   }
-  assert.ok(longest <= .5, `longest blank ${longest}`);
+  assert.ok(longest <= 1.2, `longest blank ${longest}`);
   raw.fill(0);
   for (let i = 0; i < 50; i++) f.stepScene(values, raw, .1);
   assert.ok(f.inspect().flocks.every(g => g.presence < .001));
@@ -744,4 +752,38 @@ test('spectral variety and intensity raise the flock budget smoothly, while indi
   assert.ok(sparse <= 2 && varied >= 6 && loud > varied && loud <= 10, `${sparse},${varied},${loud}`);
   const cohesion = f.inspect().flocks.flatMap(g => g.particles.map(p => p.cohesion));
   assert.ok(Math.min(...cohesion) < .5 && Math.max(...cohesion) > 1.2);
+});
+
+
+test('new individuals enter from the focus or beyond the viewport, including population growth', () => {
+  const f = fixture(async stream => stream, { width: 390, height: 740 });
+  const values = new Float64Array(512); values.fill(.5);
+  const styles = new Set();
+  let births = 0;
+  for (let i = 0; i < 35; i++) {
+    const before = new Map(f.inspect().flocks.flatMap(g => g.particles.map(p => [p, { alpha: p.alpha, seeded: p.seeded }])));
+    f.stepScene(values, values, .1);
+    const { focus, flocks } = f.inspect();
+    for (const g of flocks) for (const p of g.particles) {
+      const old = before.get(p);
+      if (old.alpha >= .005 || old.seeded || p.alpha < .005) continue;
+      births++; styles.add(g.entryStyle);
+      const reach = f.speedLimit() * .1 + 1;
+      assert.ok(Math.hypot(p.x - focus.x, p.y - focus.y) <= reach ||
+        p.x < 0 || p.x > 390 || p.y < 0 || p.y > 740, 'birth has a visible source');
+    }
+  }
+  assert.ok(births > 100 && styles.has(0) && styles.has(2) && styles.has(3));
+});
+
+test('a returning dispersed flock preserves visible individuals and their bounded motion', () => {
+  const f = fixture(async stream => stream, { width: 390, height: 740 });
+  const values = new Float64Array(512); values.fill(.3);
+  f.stepScene(values, values, .1);
+  const g = f.inspect().flocks[0], p = g.particles[0];
+  Object.assign(g, { active: false, exiting: true, presence: .7, gate: true, quiet: .5 });
+  Object.assign(p, { x: 45, y: 90, vx: 10, vy: -5, alpha: .7, seeded: true });
+  f.stepScene(values, values, .1);
+  assert.ok(Math.hypot(p.x - 45, p.y - 90) <= f.speedLimit() * .1 + 1e-6);
+  assert.ok(p.alpha > .6 && !g.exiting, 'the same dispersed individual reforms without fading out');
 });

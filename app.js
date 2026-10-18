@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.18.12';
+  const VERSION = '2026.10.18.13';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -830,7 +830,7 @@
       const low = flockRanges[host.region], high = flockRanges[host.region + 1];
       p.band = low + Math.floor(p.tint * (high - low));
       Object.assign(spare, { x: owner.x, y: owner.y, vx: owner.vx, vy: owner.vy,
-        alpha: 0, strength: 0, travelState: 0, travelTarget: -1, travelAge: 0,
+        alpha: 0, strength: 0, seeded: false, travelState: 0, travelTarget: -1, travelAge: 0,
         tailCount: 0, tailHead: 0, tailTime: -10, dormantUntil: 0,
         guestUntil: 0, nextTrip: elapsed + 10 + spare.tint * 12,
         band: flockRanges[owner.region] + Math.floor(spare.tint * (flockRanges[owner.region + 1] - flockRanges[owner.region])) });
@@ -893,7 +893,7 @@
     p.cohesion = (p.cohesion * a + q.cohesion * b) / mass;
     p.reactionAfter = elapsed + 12; p.guestUntil = Math.max(p.guestUntil, elapsed + 8);
     p.tailCount = p.tailHead = 0; p.tailTime = -10;
-    q.alpha = 0; q.dormantUntil = elapsed + 12; q.guestUntil = 0; q.reactionAfter = elapsed + 12;
+    q.alpha = 0; q.seeded = false; q.dormantUntil = elapsed + 12; q.guestUntil = 0; q.reactionAfter = elapsed + 12;
     q.tailCount = q.tailHead = 0;
     soundProfile.merges++; return true;
   }
@@ -1000,12 +1000,32 @@
         cohesion: .35 + hash(id, j, 8051), dormantUntil: 0, reactionAfter: 0,
         travelState: 0, travelTarget: -1, travelAge: 0, guestUntil: 0, mirrorWeight: 1,
         tail: new Float64Array(36), tailHead: 0, tailCount: 0, tailTime: -10,
-        nextTrip: 4 + hash(id, j, 8030) * 15, driftAngle: 0,
+        nextTrip: 4 + hash(id, j, 8030) * 15, driftAngle: 0, seeded: false,
         baseTone: (flockRanges[id % 5] + hash(id, j, 8005) * (flockRanges[id % 5 + 1] - flockRanges[id % 5])) / (N - 1),
         x: width * (.2 + .6 * hash(id, 0, 8001)),
         y: height * (.2 + .6 * hash(id, 0, 8002)), alpha: 0, strength: 0, vx: 0, vy: 0
       }))
     }));
+  }
+  // Only invisible slots may be emitted. Existing individuals always keep
+  // their position and momentum, including when a departing flock reforms.
+  function emitParticle(f, p, j, safety = false) {
+    const kind = safety ? 0 : f.entryStyle || 0;
+    const margin = 40 + p.size * 4;
+    let x = focus.x, y = focus.y;
+    if (kind >= 2) {
+      const side = kind === 2 ? (f.id + f.episode) % 4 : j % 4;
+      const u = kind === 2 ? .5 + (p.tint - .5) * .18 : p.tint;
+      if (side === 0) { x = -margin; y = height * u; }
+      if (side === 1) { x = width + margin; y = height * u; }
+      if (side === 2) { x = width * u; y = -margin; }
+      if (side === 3) { x = width * u; y = height + margin; }
+    }
+    const speed = particleSpeedLimit() * .24;
+    Object.assign(p, { x, y, vx: Math.cos(p.angle) * speed, vy: Math.sin(p.angle) * speed,
+      mirrorX: x, mirrorY: y, mvx: 0, mvy: 0,
+      travelState: 0, travelTarget: -1, guestUntil: 0,
+      tailCount: 0, tailHead: 0, tailTime: -10, seeded: true });
   }
   function updateBeatExpression(f, dt) {
     // Counted beats describe a visual phrase, not an inferred musical meter.
@@ -1084,20 +1104,18 @@
       const window = phraseClock % 1;
       const enabled = selected.has(f.id) && (f.voice === 0 ? window < .82 : window > .18 && window < .72 && drive > .25);
       const safety = rescue && f.id === strongest;
-      if (safety && (!f.active || f.particles.some(p => p.alpha > .08))) {
-        f.presence = 0; f.active = false;
-      }
       const gate = chooseFlockGate(f, enabled, drive > .035, safety, elapsed);
       const target = gate ? drive : 0;
       if (target > .035 && !f.active) {
+        if (f.presence < .001) f.trail = [];
+        f.particles.forEach(p => {
+          if (p.alpha < .005) { p.alpha = 0; p.seeded = false; }
+        });
+        // Blank-screen recovery emits at the focus; it never relocates live particles.
+        f.entryStyle = safety ? 0 : (f.id + f.episode) % 4;
+        f.entryStarted = elapsed;
         if (f.presence < .001) {
-          f.trail = [];
-          f.particles.forEach(p => { const r = Math.min(width, height) * .12 * p.distance;
-            p.x = f.x + Math.cos(p.angle) * r; p.y = f.y + Math.sin(p.angle) * r;
-            p.vx = Math.cos(p.angle + Math.PI / 2) * 35;
-            p.vy = Math.sin(p.angle + Math.PI / 2) * 35; p.alpha = 0;
-            p.travelState = 0; p.travelTarget = -1; p.guestUntil = 0;
-            p.tailCount = p.tailHead = 0; p.tailTime = -10; p.dormantUntil = 0; });
+          f.x = focus.x; f.y = focus.y; f.vx = f.vy = 0;
         }
         f.episode++;
         f.exitStyle = (f.id + f.episode - 1) % 4;
@@ -1162,7 +1180,7 @@
         (1 + f.motionPulse * .5 + f.groove * .18) * (.8 + .2 * Math.sin(t * .4 + f.id));
       const count = f.exiting ? f.exitPopulation : Math.round(16 + f.level * (64 + 48 * (.5 + .5 * Math.sin(t * .24 + f.id))));
       f.population = count; f.radius = radius;
-      const symmetryChoice = Math.floor(hash(f.id, Math.floor(phrase), 8022) * 7);
+      const symmetryChoice = Math.floor(hash(f.id, f.episode, 8022) * 7);
       const symmetry = symmetryChoice < 4 ? 0 : symmetryChoice - 3;
       if (symmetry !== f.mirrorType && f.mirrorAlpha < .03) f.mirrorType = symmetry;
       f.mirrorAlpha = lerp(symmetry === f.mirrorType && symmetry ? 1 : 0, f.mirrorAlpha, Math.exp(-dt / .65));
@@ -1181,7 +1199,14 @@
       f.particles.forEach((p, j) => {
         if (p.dormantUntil > elapsed) { p.alpha = 0; return; }
         p.strength = lerp(clamp(energies[p.band] / Math.max(.06, environment), 0, 1), p.strength, Math.exp(-dt / .12));
-        p.alpha = lerp(j < count || p.guestUntil > elapsed || p.travelState ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
+        const wanted = j < count || (safety && !p.seeded) || p.guestUntil > elapsed || p.travelState;
+        if (p.alpha < .005 && !wanted) p.seeded = false;
+        if (wanted && p.alpha < .005 && !p.seeded && !f.exiting) {
+          // A short emission sequence makes the source readable before cohesion.
+          if (!safety && elapsed - f.entryStarted < j * (f.entryStyle === 1 ? .025 : .008)) return;
+          emitParticle(f, p, j, safety);
+        }
+        p.alpha = lerp(wanted ? f.presence : 0, p.alpha, Math.exp(-dt / .18));
         p.baseTone = lerp(p.band / (N - 1), p.baseTone, Math.exp(-dt / 1.4));
         p.mirrorWeight = lerp(p.travelState ? 0 : 1, p.mirrorWeight, Math.exp(-dt / .35));
         if (j >= count && p.alpha < .005 && !f.exiting && !p.travelState) return;
