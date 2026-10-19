@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.40';
+  const VERSION = '2026.10.19.41';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1471,16 +1471,19 @@
     const angle = f * Math.PI * 2 + vortex.rotation + (Math.random() - .5) * .08;
     const scale = Math.min(width, height) / 700;
     // The launch point follows the frequency ray; velocity tilts away from it.
-    const deflection = ambient ? .15 : .15 + 1.05 * attack;
+    const deflection = ambient ? .15 : .55 + attack;
+    // Gentle and sharp attacks peel away on opposite sides of the radial ray.
+    const bendDirection = vortex.direction * (attack < .35 ? -1 : 1);
+    const turnRate = ambient ? 0 : bendDirection * (.9 + 3.1 * attack);
     for (let c = 0; c < copies; c++) {
       const a = angle + c * Math.PI * 2 / copies;
-      const heading = a + vortex.direction * deflection;
-      const speed = (ambient ? 35 : 60 + 1900 * Math.pow(volume, 1.5)) * scale;
+      const heading = a + bendDirection * deflection;
+      const speed = (ambient ? 35 : 35 + 3600 * Math.pow(volume, 3)) * scale;
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
         vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
         radius: (1 + (1-f)**2 * 3) * (1 + volume * .25) * (ambient ? .25 : 1),
-        mass: 1 + (1-f) * 1.8, f, age: 0, lifeProgress: 0, life: ambient ? 5 : 6 });
+        mass: 1 + (1-f) * 1.8, turnRate, f, age: 0, lifeProgress: 0, life: ambient ? 5 : 6 });
     }
   }
   function updateVortex(dt) {
@@ -1537,7 +1540,7 @@
           const energy = value * Math.sqrt(gain);
           const volume = energy / (energy + .4);
           const slope = attack / Math.max(.001,windowDuration*60);
-          emitVortex(band/(bandCount-1),volume,slope/(slope+.25));
+          emitVortex(band/(bandCount-1),volume,slope/(slope+.06));
         }
       }
       v.windowPeaks.fill(0); v.analysisElapsed = 0;
@@ -1554,6 +1557,12 @@
     for (const p of v.particles) {
       p.px=p.x; p.py=p.y; p.age+=dt; p.lifeProgress+=dt*v.decayRate;
       for(let j=0;j<steps;j++) {
+        // Curve the actual flight path: tilting velocity at the origin alone
+        // still looks like a straight spoke once the particle moves away.
+        const age = p.age-dt+(j+.5)*step;
+        const turn = p.turnRate * Math.exp(-age/.65) * step;
+        const cos = Math.cos(turn), sin = Math.sin(turn), vx = p.vx;
+        p.vx = vx*cos-p.vy*sin; p.vy = vx*sin+p.vy*cos;
         const d=Math.max(1,Math.hypot(p.x,p.y)), nx=-p.x/d, ny=-p.y/d;
         const gravity=(180/p.mass)*(1-v.pulse*1.8)*scale;
         // Tangential force tapers near the core to allow eventual absorption.

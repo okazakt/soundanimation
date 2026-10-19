@@ -38,7 +38,7 @@ test('AI cache stays independent of shell installation, survives upgrades, and s
   assert.equal(f.fetched.length, 4);
   await f.boot().get(files[0]); assert.equal(f.fetched.length, 4, 'reload must use persisted model without fetching');
   f.stores.set('sensor-cache', new Map()); f.stores.set('starlight-bell-soundanimation-v0', new Map());
-  const upgrade = f.boot(code.replaceAll('2026.10.19.40', '2026.10.19.41'));
+  const upgrade = f.boot(code.replaceAll('2026.10.19.41', '2026.10.19.42'));
   await new Promise(resolve => upgrade.events.activate({ waitUntil: p => p.then(resolve) }));
   assert.equal(upgrade.claims(), 1); assert.ok(f.stores.has(modelCache)); assert.ok(f.stores.has('sensor-cache'));
   assert.ok(f.removed.includes('starlight-bell-soundanimation-v0')); assert.ok(!f.removed.includes(modelCache));

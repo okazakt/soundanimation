@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.40'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.41'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -1032,6 +1032,7 @@ test('vortex launch speed and reach follow band volume while angle follows the p
     f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
     const v = f.inspect().vortex;
     v.particles.length = 0;
+    v.levels.length = 0; // Compare slopes under the same loudness adaptation history.
     level = next; await f.tick(.08);
     const p = v.particles[0];
     assert.ok(p);
@@ -1039,20 +1040,25 @@ test('vortex launch speed and reach follow band volume while angle follows the p
     const cross = p.px * p.vy - p.py * p.vx;
     const dot = p.px * p.vx + p.py * p.vy;
     const angle = Math.atan2(cross,dot);
-    let reach = 0;
+    const startVx=p.vx, startVy=p.vy;
+    let reach = 0, turn = 0;
     for(let i=0;i<90;i++) {
       await f.tick();
       reach = Math.max(reach,Math.hypot(p.x,p.y));
+      if(i===14) turn=Math.atan2(startVx*p.vy-startVy*p.vx,startVx*p.vx+startVy*p.vy);
     }
     f.nodes['#stop'].click();
-    return { speed, angle, reach };
+    return { speed, angle, reach, turn, turnRate: p.turnRate };
   }
   const soft=await launch(0,30), loud=await launch(0,230), gentle=await launch(210,230);
-  assert.ok(loud.speed > soft.speed * 1.5, 'band volume changes speed without saturating at the same value');
+  assert.ok(loud.speed > soft.speed * 3, 'band volume changes speed without saturating at the same value');
   assert.ok(loud.reach > soft.reach * 1.3, 'louder launches travel farther through the same field');
-  assert.ok(Math.abs(loud.angle) > Math.abs(gentle.angle) + .2, 'sharper attack makes a larger tangential launch angle');
-  assert.ok(Math.abs(gentle.angle) > .1, 'gentle attacks still launch at an angle');
-  assert.ok(Math.abs(loud.speed-gentle.speed) < loud.speed * .15, 'equal volume keeps similar speed despite different gain history and slopes');
+  assert.ok(Math.abs(loud.angle) > Math.abs(gentle.angle) + .3, 'sharper attack makes a larger tangential launch angle');
+  assert.ok(Math.abs(gentle.angle) > .5, 'even gentle attacks visibly tilt away from the frequency ray');
+  assert.ok(loud.turnRate*gentle.turnRate<0, 'sharp and gentle attacks curve in opposite directions');
+  assert.ok(Math.abs(loud.turn)>.35, 'flight direction visibly curves after launch');
+  assert.ok(loud.turn*gentle.turn<0, 'the actual trajectories turn in opposite directions');
+  assert.ok(Math.abs(loud.speed-gentle.speed) < loud.speed * .15, 'equal volume keeps similar speed despite different slopes');
 });
 
 
