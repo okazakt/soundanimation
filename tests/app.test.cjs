@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.36'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.37'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -946,7 +946,7 @@ test('vortex cycles in both directions, bounds particles, accepts beats and rese
   for (let i=0;i<90;i++) await f.tick();
   let v=f.inspect().vortex;
   assert.ok(v.particles.length > 0, 'silence keeps ambient particles moving');
-  assert.ok(v.particles.length <= 1200);
+  assert.ok(v.particles.length <= 200);
   assert.ok(v.particles.every(p=>[p.x,p.y,p.vx,p.vy].every(Number.isFinite)));
   const direction=v.direction;
   for(let i=0;i<16;i++) {
@@ -974,7 +974,30 @@ test('vortex responds to spectral attacks within a fixed particle budget', async
   assert.ok(v.particles.length>0);
   assert.ok(v.particles.some(p=>p.f>.5),'high frequencies receive emission slots');
   for(let i=0;i<150;i++) { loud=!loud; await f.tick(.1); }
-  assert.ok(v.particles.length<=1200);
+  assert.ok(v.particles.length<=200);
   assert.ok(v.particles.every(p=>[p.x,p.y,p.vx,p.vy].every(Number.isFinite)));
+  f.nodes['#stop'].click();
+});
+
+
+test('vortex selects only the five strongest attacks and launches small fast streaks', async () => {
+  let loud = false;
+  const peaks = [40, 300, 620, 950, 1300];
+  const f = fixture(async stream => stream, { spectrum(data) {
+    data.fill(loud ? 30 : 0);
+    if(loud) peaks.forEach((bin, rank) => { data[bin] = 210 + rank * 10; });
+  } });
+  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click();
+  await f.tick(); loud = true; await f.tick();
+  const particles = f.inspect().vortex.particles;
+  assert.equal(particles.length, 10, 'five bands with two symmetric copies each');
+  const bands = [...new Set(particles.map(p => Math.round(p.f * 1432)))].sort((a,b)=>a-b);
+  assert.deepEqual(bands, peaks);
+  assert.ok(particles.every(p => p.radius >= 1 && p.radius <= 5));
+  assert.ok(particles.every(p => Math.hypot(p.vx,p.vy) > 600), 'strong launches leave the core quickly');
+  assert.ok(particles.every(p => Math.hypot(p.x-p.px,p.y-p.py) > 5), 'previous positions define visible streaks');
+  const before = particles.length;
+  await f.tick();
+  assert.equal(f.inspect().vortex.particles.length, before, 'sustained spectrum does not emit again');
   f.nodes['#stop'].click();
 });

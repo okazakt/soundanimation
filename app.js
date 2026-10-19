@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.36';
+  const VERSION = '2026.10.19.37';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1470,13 +1470,13 @@
     const copies = ambient ? 1 : (Math.floor(vortex.beats / 16) % 2 ? 4 : 2);
     const angle = f * Math.PI * 2 + vortex.time * .12 + (Math.random() - .5) * .08;
     const scale = Math.min(width, height) / 700;
-    for (let c = 0; c < copies && vortex.particles.length < 1200; c++) {
+    for (let c = 0; c < copies && vortex.particles.length < 200; c++) {
       const a = angle + c * Math.PI * 2 / copies;
-      const speed = (ambient ? 35 : 130 + volume * 220 + attack * 420) * scale;
+      const speed = (ambient ? 35 : (130 + volume * 220 + attack * 420) * 2.3) * scale;
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
         vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
-        radius: (1 + (1-f)**2 * 17) * (1 + volume * .5) * Math.max(.5, scale) * (ambient ? .25 : 1),
+        radius: (1 + (1-f)**2 * 3) * (1 + volume * .25) * (ambient ? .25 : 1),
         mass: 1 + (1-f) * 1.8, f, age: 0, life: ambient ? 5 : 12 });
     }
   }
@@ -1504,16 +1504,25 @@
     v.bass += (bass-v.bass)*(1-Math.exp(-dt/1.5));
     // Rotate the scan start so a dense attack cannot starve high frequencies.
     const start = Math.floor(v.time*997)%Math.max(1,count);
-    let emitted = 0;
+    const strongest = [];
     for (let n=0;n<count;n++) {
       const offset = n % 2 ? Math.ceil(count/2) + Math.floor(n/2) : Math.floor(n/2);
       const i=(start+offset)%count;
       const value=demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
       const attack=Math.max(0,value-v.previous[i])*gain;
       v.previous[i]=value;
-      if (attack>.065 && emitted<Math.ceil(1800*dt)) {
-        emitVortex(i/Math.max(1,count-1),clamp(value*gain,0,1),Math.min(1,attack)); emitted++;
+      if (attack > .065) {
+        const candidate = { i, value, attack };
+        let rank = 0;
+        while (rank < strongest.length && strongest[rank].attack >= attack) rank++;
+        if (rank < 5) {
+          strongest.splice(rank, 0, candidate);
+          if (strongest.length > 5) strongest.pop();
+        }
       }
+    }
+    for (const { i, value, attack } of strongest) {
+      emitVortex(i/Math.max(1,count-1),clamp(value*gain,0,1),Math.min(1,attack));
     }
     v.idle += dt;
     if (mean < .015 && v.idle > .12) { emitVortex(Math.random(),.08,.02,true); v.idle=0; }
@@ -1523,7 +1532,7 @@
       p.px=p.x; p.py=p.y; p.age+=dt;
       for(let j=0;j<steps;j++) {
         const d=Math.max(1,Math.hypot(p.x,p.y)), nx=-p.x/d, ny=-p.y/d;
-        const gravity=(230/p.mass)*(1-v.pulse*1.8)*scale;
+        const gravity=(180/p.mass)*(1-v.pulse*1.8)*scale;
         // Tangential force tapers near the core to allow eventual absorption.
         const swirl=65*v.direction*(1+v.pulse*3)*Math.min(1,d/100)*scale;
         const drag=Math.pow(.97,step*60);
@@ -1537,7 +1546,7 @@
   function drawVortex() {
     const v=vortex;
     ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
-    ctx.fillStyle=v.fresh ? '#000000' : `rgba(0,0,0,${1-Math.pow(.92,Math.max(.25,v.renderDt || 1))})`;
+    ctx.fillStyle=v.fresh ? '#000000' : `rgba(0,0,0,${1-Math.pow(.82,Math.max(.25,v.renderDt || 1))})`;
     ctx.fillRect(0,0,width,height); v.fresh=false;
     ctx.save(); ctx.translate(width/2,height/2);
     const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -1548,9 +1557,8 @@
       const r=Math.max(.25,p.radius*clamp(d/100,.08,1));
       const alpha=clamp(d/25,0,1)*Math.min(1,(p.life-p.age)/.8);
       const hue=(v.hue+p.f*120)%360;
-      const light=55+40*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
-      if(r>3) { ctx.fillStyle=`hsla(${hue},95%,60%,${alpha*.12})`; ctx.beginPath(); ctx.arc(p.x,p.y,r*2.2,0,Math.PI*2); ctx.fill(); }
-      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.85})`; ctx.lineWidth=r*2;
+      const light=50+25*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
+      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.28})`; ctx.lineWidth=r*2;
       ctx.beginPath(); ctx.moveTo(p.px,p.py); ctx.lineTo(p.x,p.y); ctx.stroke();
     }
     const radius=12+Math.min(.5,v.average)*12+v.pulse*8;
