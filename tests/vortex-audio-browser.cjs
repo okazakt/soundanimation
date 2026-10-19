@@ -37,8 +37,8 @@ async function sample(value,path){
   await page.screenshot({path:path.replace('.png','-returning.png')});
  }
  await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
- const finish=await page.evaluate(()=>({absorbed:testState().vortex.absorbed,expired:testState().vortex.expired,allAbsorbed:lastCohort.every(p=>p.finishReason==='absorbed'),returnTime:Math.max(...lastCohort.map(p=>p.age))}));
- return {...result,absorbed:finish.absorbed-before.absorbed,expired:finish.expired-before.expired,allAbsorbed:finish.allAbsorbed,returnTime:finish.returnTime};
+ const finish=await page.evaluate(()=>({absorbed:testState().vortex.absorbed,expired:testState().vortex.expired,allAbsorbed:lastCohort.every(p=>p.finishReason==='absorbed'),returnTime:Math.max(...lastCohort.map(p=>p.age)),smallReach:Math.max(0,...lastCohort.filter(p=>p.radius<=2.5).map(p=>p.maxDistance))}));
+ return {...result,absorbed:finish.absorbed-before.absorbed,expired:finish.expired-before.expired,allAbsorbed:finish.allAbsorbed,returnTime:finish.returnTime,smallReach:finish.smallReach};
 }
 await sample(.12,artifact('vortex-audio-calibration.png'));
 // Simulate a large gain in the shared display path: the raw branch must remain independent.
@@ -56,7 +56,20 @@ const slowLarge=await page.evaluate(async()=>{
  return found;
 });
 await level(0);await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
-const result={errors,weak,strong,remaining,slowLarge};console.log(JSON.stringify(result));
-if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0||!weak.allAbsorbed||!strong.allAbsorbed||weak.expired||strong.expired||!slowLarge.some(p=>p.speed<strong.speed*.6))throw new Error('Real AudioContext contrast regression failed');
+// Repeated real audio attacks leave a pattern from the rotating single nozzle.
+const pattern=await page.evaluate(async()=>{
+ const {context,bus}=testAudio,start=context.currentTime+.05;
+ for(let i=0;i<12;i++){
+  bus.gain.setValueAtTime([.12,.05,.085][i%3],start+i*.25);
+  bus.gain.setValueAtTime(0,start+i*.25+.11);
+ }
+ let maxVisible=0,maxRate=0;const end=performance.now()+3050;
+ while(performance.now()<end){await new Promise(requestAnimationFrame);const v=testState().vortex;maxVisible=Math.max(maxVisible,v.visibleCount);maxRate=Math.max(maxRate,v.emitterSpeed);}
+ return {maxVisible,maxRate};
+});
+await page.screenshot({path:artifact('vortex-audio-pattern.png')});
+await level(0);await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
+const result={errors,weak,strong,remaining,slowLarge,pattern};console.log(JSON.stringify(result));
+if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0||!weak.allAbsorbed||!strong.allAbsorbed||weak.expired||strong.expired||!slowLarge.some(p=>p.speed<strong.speed*.6)||strong.smallReach<195||pattern.maxVisible<5||pattern.maxRate<.45)throw new Error('Real AudioContext contrast regression failed');
 await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

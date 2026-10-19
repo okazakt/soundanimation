@@ -53,8 +53,8 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { performance: { now: () => now }, Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.emitVortex = (f,v,a) => emitVortex(f,v,a);\n  window.integrateVortex = dt => integrateVortex(dt);\n  window.stepVortex = dt => updateVortex(dt);\n  window.inspect = () => ({ vortex, flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawRadiation = () => drawBeatRadiation();\n  window.drawFlocks = () => drawFlocks();\n  window.setInputLevel = value => { latestInputLevel=value; };\n  window.setVisualRhythm = value => { beatThisClient={stopped:false,stop(){}};rhythm={...basicRhythm,...value}; };\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
-  return { emitVortex:(...args)=>window.emitVortex(...args), integrateVortex:dt=>window.integrateVortex(dt), stepVortex: dt => window.stepVortex(dt), triggerBeat: value => window.triggerBeat(value), nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.updateVortexEmitter = dt => updateVortexEmitter(dt);\n  window.emitVortex = (f,v,a) => emitVortex(f,v,a);\n  window.integrateVortex = dt => integrateVortex(dt);\n  window.stepVortex = dt => updateVortex(dt);\n  window.inspect = () => ({ vortex, flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawRadiation = () => drawBeatRadiation();\n  window.drawFlocks = () => drawFlocks();\n  window.setInputLevel = value => { latestInputLevel=value; };\n  window.setVisualRhythm = value => { beatThisClient={stopped:false,stop(){}};rhythm={...basicRhythm,...value}; };\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  return { updateVortexEmitter:dt=>window.updateVortexEmitter(dt), emitVortex:(...args)=>window.emitVortex(...args), integrateVortex:dt=>window.integrateVortex(dt), stepVortex: dt => window.stepVortex(dt), triggerBeat: value => window.triggerBeat(value), nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     drawRadiation: () => window.drawRadiation(),
     drawFlocks: () => window.drawFlocks(),
@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.45'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.46'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -987,10 +987,10 @@ test('vortex 48-band and 80ms pooling captures short attacks without a fixed par
   set(.01);for(let i=0;i<4;i++)await f.tick();
   assert.equal(v.particles.length,0);
   set(0);await f.tick();
-  assert.equal(v.particles.length,96,'short attack retained and pooled into 48 symmetric pairs');
+  assert.equal(v.particles.length,48,'short attack retained with one particle for each of 48 bands');
   assert.ok(v.particles.every(p=>p.radius>=.45 && p.radius<=15));
-  for(let i=0;i<3;i++){await sample();set(.01);await sample();set(0);await sample();}
-  assert.ok(v.particles.length>200,'coarse emission is not a hidden 200-particle cap');
+  for(let i=0;i<200;i++)f.emitVortex(.5,.8,.5);
+  assert.ok(v.particles.length>200,'single-nozzle emission has no hidden particle count cap');
   f.nodes['#stop'].click();
 });
 test('vortex crisp heads expose size at birth and survive until core absorption',async()=>{
@@ -1033,7 +1033,7 @@ test('vortex does not suppress a stronger onset arriving during a band cooldown'
 test('vortex size is continuous across intermediate radii rather than two discrete groups',async()=>{
   const {f,v}=await vortexScene();
   for(let i=0;i<=100;i++)f.emitVortex(.1,i/100,.5);
-  const radii=v.particles.filter((_,i)=>i%2===0).map(p=>p.radius);
+  const radii=v.particles.map(p=>p.radius);
   assert.ok(radii.every((r,i)=>i===0||r>radii[i-1]),'every increase in volume yields an intermediate size');
   for(const [min,max] of [[1,3],[3,5],[5,8],[8,11],[11,14]]) {
     assert.ok(radii.some(r=>r>=min&&r<max),`intermediate sizes exist in ${min}..${max}px`);
@@ -1085,4 +1085,44 @@ test('vortex raw-audio gentle bass growth can emit a large slow particle, not ju
   const gentle=await launch(.006),sharp=await launch(0);
   assert.ok(gentle.radius>8);assert.ok(Math.abs(gentle.radius-sharp.radius)<1);
   assert.ok(gentle.speed<sharp.speed*.6);
+});
+
+
+test('vortex emits one particle per event from a common rotating point without point-symmetric copies',async()=>{
+  const {f,v}=await vortexScene();
+  v.rotation=.7;
+  f.emitVortex(0,.8,.3);f.emitVortex(1,.8,.8);
+  assert.equal(v.particles.length,2,'two events create two particles, not symmetric pairs');
+  const [bass,treble]=v.particles;
+  assert.equal(bass.x,treble.x);assert.equal(bass.y,treble.y);
+  assert.notEqual(Math.atan2(bass.vy,bass.vx),Math.atan2(treble.vy,treble.vx),'frequency and attack shape the departure angle');
+  for(let i=0;i<60;i++)f.updateVortexEmitter(1/60);
+  f.emitVortex(.5,.8,.5);const later=v.particles.at(-1);
+  assert.ok(Math.hypot(later.x-bass.x,later.y-bass.y)>3,'successive events trace the rotating nozzle');
+  v.beats=16;const before=v.particles.length;f.emitVortex(.5,.8,.5);
+  assert.equal(v.particles.length,before+1,'section changes never restore symmetric copies');
+  f.nodes['#stop'].click();
+});
+test('vortex nozzle rotation follows visible particle count smoothly and excludes offscreen particles',async()=>{
+  const {f,v}=await vortexScene();
+  f.updateVortexEmitter(1/60);const sparse=v.emitterSpeed;
+  for(let i=0;i<100;i++)f.emitVortex(.5,.5,.5);
+  f.updateVortexEmitter(1/60);
+  assert.equal(v.visibleCount,100);assert.ok(v.emitterSpeed>sparse && v.emitterSpeed<1,'rate change is smooth');
+  for(let i=0;i<300;i++)f.updateVortexEmitter(1/60);
+  const dense=v.emitterSpeed;assert.ok(dense>sparse*4);
+  for(const p of v.particles)p.x=10000;
+  f.updateVortexEmitter(1/60);assert.equal(v.visibleCount,0);
+  for(let i=0;i<300;i++)f.updateVortexEmitter(1/60);
+  assert.ok(Math.abs(v.emitterSpeed-.35)<.01);
+  f.nodes['#stop'].click();
+});
+test('vortex sharp treble creates small far-reaching particles which still return',async()=>{
+  const {f,v}=await vortexScene();
+  f.emitVortex(1,.95,.9);const p=v.particles[0];
+  assert.ok(p.radius<1.4);
+  for(let i=0;i<1440&&v.particles.length;i++)f.integrateVortex(1/60);
+  assert.ok(p.maxDistance>195,'a small head reaches beyond the phone half-width');
+  assert.equal(p.finishReason,'absorbed');assert.equal(v.expired,0);
+  f.nodes['#stop'].click();
 });

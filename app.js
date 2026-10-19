@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.45';
+  const VERSION = '2026.10.19.46';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1455,13 +1455,13 @@
   }
 
   // Positions are relative to the core, so rotation and resize preserve the field.
-  const vortex = { particles: [], previous: new Float32Array(48), windowPeaks: new Float32Array(48), analysisElapsed: 0, reference: 0, bandCooldowns: new Float32Array(48), lastEmitted: new Float32Array(48), levels: [],
+  const vortex = { particles: [], previous: new Float32Array(48), windowPeaks: new Float32Array(48), analysisElapsed: 0, reference: 0, bandCooldowns: new Float32Array(48), lastEmitted: new Float32Array(48), bandReferences: new Float32Array(48), levels: [],
     average: 0, bass: .01, pulse: 0, beats: 0, direction: 1, hue: 210,
-    targetHue: 210, absorbed: 0, expired: 0, cooldown: 0, time: 0, rotation: 0, rotationSpeed: 1, densityAlpha: 1, fresh: true };
+    targetHue: 210, absorbed: 0, expired: 0, cooldown: 0, time: 0, rotation: 0, rotationSpeed: 1, emitterSpeed: .35, visibleCount: 0, densityAlpha: 1, fresh: true };
   function resetVortex() {
-    vortex.particles.length = 0; vortex.previous.fill(0); vortex.windowPeaks.fill(0); vortex.analysisElapsed = 0; vortex.reference = 0; vortex.bandCooldowns.fill(0); vortex.lastEmitted.fill(0); vortex.levels.length = 0;
+    vortex.particles.length = 0; vortex.previous.fill(0); vortex.windowPeaks.fill(0); vortex.analysisElapsed = 0; vortex.reference = 0; vortex.bandCooldowns.fill(0); vortex.lastEmitted.fill(0); vortex.bandReferences.fill(0); vortex.levels.length = 0;
     Object.assign(vortex, { average: 0, bass: .01, pulse: 0, beats: 0,
-      direction: 1, hue: 210, targetHue: 210, absorbed: 0, expired: 0, cooldown: 0, time: 0, rotation: 0, rotationSpeed: 1, densityAlpha: 1, fresh: true });
+      direction: 1, hue: 210, targetHue: 210, absorbed: 0, expired: 0, cooldown: 0, time: 0, rotation: 0, rotationSpeed: 1, emitterSpeed: .35, visibleCount: 0, densityAlpha: 1, fresh: true });
   }
   function triggerVortexBeat(isDownbeat = false) {
     if (!running || document.hidden || mode !== 'vortex' || vortex.cooldown > 0) return;
@@ -1471,31 +1471,38 @@
     }
   }
   window.triggerBeat = triggerVortexBeat;
-  function emitVortex(f, volume, attack, ambient = false) {
-    const copies = ambient ? 1 : (Math.floor(vortex.beats / 16) % 2 ? 4 : 2);
-    const angle = f * Math.PI * 2 + vortex.rotation + (Math.random() - .5) * .08;
+  function emitVortex(f, volume, attack, speedVolume = volume) {
     const scale = Math.min(width, height) / 700;
-    // The launch point follows the frequency ray; velocity tilts away from it.
-    const deflection = ambient ? .15 : .55 + attack;
-    // Gentle and sharp attacks peel away on opposite sides of the radial ray.
+    // All bands share one rotating nozzle. Frequency spreads the velocity,
+    // not the position; no antipodal or quadrant copies are created.
+    const a = vortex.rotation;
+    const deflection = .45 + .7*attack;
     const bendDirection = vortex.direction * (attack < .35 ? -1 : 1);
-    const turnRate = ambient ? 0 : bendDirection * (.9 + 3.1 * attack);
-    // Volume controls the visible head, rather than only a faint stroke width.
-    // One continuous size curve: no normal/3x switch or missing middle sizes.
-    // Body (volume + frequency) controls size; attack additionally controls speed.
-    const radius = ambient ? .35 : .45 + 14.55 * Math.pow(volume,.9) *
-      (.2 + .8 * Math.pow(1-f,1.3));
-    for (let c = 0; c < copies; c++) {
-      const a = angle + c * Math.PI * 2 / copies;
-      const heading = a + bendDirection * deflection;
-      const speed = (ambient ? 35 : 70 + 1900 * volume*volume * (.08 + .92*attack*attack)) * scale;
-      vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
-        px: Math.cos(a) * 13, py: Math.sin(a) * 13,
-        vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
-        radius,
-        mass: 1 + Math.pow(radius/5,.7) * 1.6, turnRate, f, age: 0,
-        maxDistance: 13, returning: false, finishReason: null, life: 30 });
+    const heading = a + bendDirection*deflection + (f-.5)*.5;
+    const turnRate = bendDirection*(.9+3.1*attack);
+    const radius = .45 + 14.55*Math.pow(volume,.9) *
+      (.06+.94*Math.pow(1-f,1.3));
+    // Bright treble attacks can travel far while retaining very small heads.
+    const speed = (70+1900*speedVolume*speedVolume*(.08+.92*attack*attack)) *
+      (1+2*f)*scale;
+    vortex.particles.push({x:Math.cos(a)*13,y:Math.sin(a)*13,
+      px:Math.cos(a)*13,py:Math.sin(a)*13,
+      vx:Math.cos(heading)*speed,vy:Math.sin(heading)*speed,
+      radius,mass:1+Math.pow(radius/5,.7)*1.6,turnRate,f,age:0,
+      maxDistance:13,returning:false,finishReason:null,life:30});
+  }
+  function updateVortexEmitter(dt) {
+    const v=vortex;
+    let count=0;
+    for(const p of v.particles) {
+      if(Math.abs(p.x)<=width/2+p.radius && Math.abs(p.y)<=height/2+p.radius) count++;
     }
+    v.visibleCount=count;
+    // Around 20 degrees/s in a sparse field; up to 160 degrees/s when busy.
+    // Smooth changes so births and absorption do not jerk the pattern around.
+    const target=.35+2.45*(1-Math.exp(-count/80));
+    v.emitterSpeed+=(target-v.emitterSpeed)*(1-Math.exp(-dt/.7));
+    v.rotation=(v.rotation+dt*v.emitterSpeed)%(Math.PI*2);
   }
   function updateVortex(dt) {
     const v = vortex; v.time += dt; v.cooldown = Math.max(0, v.cooldown-dt);
@@ -1504,7 +1511,7 @@
     const tempoSpeed = rhythm.tracking && Number.isFinite(rhythm.bpm) && rhythm.bpm > 0
       ? clamp(rhythm.bpm / 120, .5, 2) : 1;
     v.rotationSpeed += (tempoSpeed-v.rotationSpeed) * (1-Math.exp(-dt/2));
-    v.rotation += dt * .12 * v.rotationSpeed;
+    updateVortexEmitter(dt);
     if (!demo) {
       // A separate, pre-gain analyser supplies true linear amplitudes. Byte FFT
       // values are decibels and must not be treated as proportional loudness.
@@ -1556,6 +1563,9 @@
       for (let band=0; band<bandCount; band++) {
         const value = v.windowPeaks[band];
         const previous = v.previous[band];
+        const bandReference = Math.max(reference*.06,value,
+          v.bandReferences[band]*Math.exp(-windowDuration/12));
+        v.bandReferences[band] = bandReference;
         const rise = Math.max(0,value-previous);
         const attack = rise/reference;
         const novelty = rise/Math.max(reference*.08,previous);
@@ -1564,8 +1574,14 @@
         const stronger = value > v.lastEmitted[band]*1.8;
         if (value > .00001 && attack > .02 && novelty > .12 && (v.bandCooldowns[band] === 0 || stronger)) {
           const volume = clamp(value/reference,0,1);
-          const slope = attack / Math.max(.001,windowDuration*60);
-          emitVortex(band/(bandCount-1),volume,slope/(slope+.06));
+          const f=band/(bandCount-1);
+          // Treble speed responds to attacks within that band's own range;
+          // a loud bass must not reduce every high-frequency spark to a crawl.
+          const localVolume=clamp(value/bandReference,0,1);
+          const speedVolume=lerp(volume,localVolume,f);
+          const speedAttack=lerp(attack,rise/bandReference,f);
+          const slope=speedAttack/Math.max(.001,windowDuration*60);
+          emitVortex(f,volume,slope/(slope+.06),speedVolume);
           v.bandCooldowns[band] = .18; v.lastEmitted[band] = value;
         }
       }
