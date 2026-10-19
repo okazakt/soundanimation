@@ -24,13 +24,21 @@ await page.evaluate(()=>{document.querySelector('#model-setup').remove();const s
 await page.locator('#previous-mode').click();await page.locator('#start').click();
 async function level(value){await page.evaluate(v=>{testAudio.bus.gain.setValueAtTime(v,testAudio.context.currentTime);},value);}
 async function sample(value,path){
+ const before=await page.evaluate(()=>({absorbed:testState().vortex.absorbed,expired:testState().vortex.expired}));
  await level(value);
  const result=await page.evaluate(async()=>{
   let maxRadius=0,maxSpeed=0,count=0;const seen=new Set(),end=performance.now()+320;
   while(performance.now()<end){await new Promise(requestAnimationFrame);for(const p of testState().vortex.particles){if(p.age<.14){seen.add(p);maxRadius=Math.max(maxRadius,p.radius);maxSpeed=Math.max(maxSpeed,Math.hypot(p.vx,p.vy));}}}
-  return {count:seen.size,radius:maxRadius,speed:maxSpeed};
+  window.lastCohort=[...seen];return {count:seen.size,radius:maxRadius,speed:maxSpeed};
  });
- await page.screenshot({path});await level(0);await page.waitForTimeout(2500);return result;
+ await page.screenshot({path});await level(0);
+ if(value>=.1){
+  await page.waitForFunction(()=>testState().vortex.particles.some(p=>p.returning&&p.radius>8&&Math.hypot(p.x,p.y)>30&&Math.hypot(p.x,p.y)<160&&p.x*p.vx+p.y*p.vy<0),null,{timeout:10000});
+  await page.screenshot({path:path.replace('.png','-returning.png')});
+ }
+ await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
+ const finish=await page.evaluate(()=>({absorbed:testState().vortex.absorbed,expired:testState().vortex.expired,allAbsorbed:lastCohort.every(p=>p.finishReason==='absorbed'),returnTime:Math.max(...lastCohort.map(p=>p.age))}));
+ return {...result,absorbed:finish.absorbed-before.absorbed,expired:finish.expired-before.expired,allAbsorbed:finish.allAbsorbed,returnTime:finish.returnTime};
 }
 await sample(.12,artifact('vortex-audio-calibration.png'));
 // Simulate a large gain in the shared display path: the raw branch must remain independent.
@@ -39,7 +47,16 @@ const weak=await sample(.012,artifact('vortex-audio-weak.png'));
 const strong=await sample(.12,artifact('vortex-audio-strong.png'));
 await page.waitForTimeout(600);
 const remaining=await page.evaluate(()=>testState().vortex.particles.length);
-const result={errors,weak,strong,remaining};console.log(JSON.stringify(result));
-if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0)throw new Error('Real AudioContext contrast regression failed');
+// A stepped, slowly rising bass must create a genuinely large, slower cohort.
+await level(.06);await page.waitForTimeout(500);
+await level(.085);
+const slowLarge=await page.evaluate(async()=>{
+ const old=new Set(testState().vortex.particles),found=[],end=performance.now()+600;
+ while(performance.now()<end){await new Promise(requestAnimationFrame);for(const p of testState().vortex.particles){if(!old.has(p)&&p.age<.1&&p.radius>=8)found.push({radius:p.radius,speed:Math.hypot(p.vx,p.vy)});}}
+ return found;
+});
+await level(0);await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
+const result={errors,weak,strong,remaining,slowLarge};console.log(JSON.stringify(result));
+if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0||!weak.allAbsorbed||!strong.allAbsorbed||weak.expired||strong.expired||!slowLarge.some(p=>p.speed<strong.speed*.6))throw new Error('Real AudioContext contrast regression failed');
 await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.44';
+  const VERSION = '2026.10.19.45';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1457,11 +1457,11 @@
   // Positions are relative to the core, so rotation and resize preserve the field.
   const vortex = { particles: [], previous: new Float32Array(48), windowPeaks: new Float32Array(48), analysisElapsed: 0, reference: 0, bandCooldowns: new Float32Array(48), lastEmitted: new Float32Array(48), levels: [],
     average: 0, bass: .01, pulse: 0, beats: 0, direction: 1, hue: 210,
-    targetHue: 210, lastLarge: -1, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true };
+    targetHue: 210, absorbed: 0, expired: 0, cooldown: 0, time: 0, rotation: 0, rotationSpeed: 1, densityAlpha: 1, fresh: true };
   function resetVortex() {
     vortex.particles.length = 0; vortex.previous.fill(0); vortex.windowPeaks.fill(0); vortex.analysisElapsed = 0; vortex.reference = 0; vortex.bandCooldowns.fill(0); vortex.lastEmitted.fill(0); vortex.levels.length = 0;
     Object.assign(vortex, { average: 0, bass: .01, pulse: 0, beats: 0,
-      direction: 1, hue: 210, targetHue: 210, lastLarge: -1, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true });
+      direction: 1, hue: 210, targetHue: 210, absorbed: 0, expired: 0, cooldown: 0, time: 0, rotation: 0, rotationSpeed: 1, densityAlpha: 1, fresh: true });
   }
   function triggerVortexBeat(isDownbeat = false) {
     if (!running || document.hidden || mode !== 'vortex' || vortex.cooldown > 0) return;
@@ -1481,20 +1481,20 @@
     const bendDirection = vortex.direction * (attack < .35 ? -1 : 1);
     const turnRate = ambient ? 0 : bendDirection * (.9 + 3.1 * attack);
     // Volume controls the visible head, rather than only a faint stroke width.
-    const large = !ambient && f < 1/3 && volume >= .72 && attack >= .4 &&
-      vortex.time-vortex.lastLarge >= .6;
-    if (large) vortex.lastLarge = vortex.time;
-    const baseRadius = ambient ? .35 : .45 + 4.55 * Math.pow(volume,.8) * (.8+.2*(1-f));
-    const radius = baseRadius * (large ? 3 : 1);
+    // One continuous size curve: no normal/3x switch or missing middle sizes.
+    // Body (volume + frequency) controls size; attack additionally controls speed.
+    const radius = ambient ? .35 : .45 + 14.55 * Math.pow(volume,.9) *
+      (.2 + .8 * Math.pow(1-f,1.3));
     for (let c = 0; c < copies; c++) {
       const a = angle + c * Math.PI * 2 / copies;
       const heading = a + bendDirection * deflection;
-      const speed = (ambient ? 35 : 40 + 1900 * Math.pow(volume, 2)) * scale;
+      const speed = (ambient ? 35 : 70 + 1900 * volume*volume * (.08 + .92*attack*attack)) * scale;
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
         vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
-        radius, large,
-        mass: 1 + (1-f) * 1.8, turnRate, f, age: 0, lifeProgress: 0, life: ambient ? .6 : 1 + volume });
+        radius,
+        mass: 1 + Math.pow(radius/5,.7) * 1.6, turnRate, f, age: 0,
+        maxDistance: 13, returning: false, finishReason: null, life: 30 });
     }
   }
   function updateVortex(dt) {
@@ -1562,7 +1562,7 @@
         v.previous[band] = value;
         v.bandCooldowns[band] = Math.max(0,v.bandCooldowns[band]-windowDuration);
         const stronger = value > v.lastEmitted[band]*1.8;
-        if (value > .00001 && attack > .035 && novelty > .25 && (v.bandCooldowns[band] === 0 || stronger)) {
+        if (value > .00001 && attack > .02 && novelty > .12 && (v.bandCooldowns[band] === 0 || stronger)) {
           const volume = clamp(value/reference,0,1);
           const slope = attack / Math.max(.001,windowDuration*60);
           emitVortex(band/(bandCount-1),volume,slope/(slope+.06));
@@ -1571,35 +1571,44 @@
       }
       v.windowPeaks.fill(0); v.analysisElapsed = 0;
     }
-    v.idle += dt;
     // Real silence does not generate dummy particles.
-    // Crowding accelerates lifetime consumption, including existing particles.
-    // This is a continuous density response, not a particle admission limit.
-    const density = v.particles.length / 1500;
-    v.decayRate = 1 + density * density;
-    v.densityAlpha = 1 / Math.sqrt(1 + density);
-    // Small substeps keep the force field stable at low frame rates.
+    integrateVortex(dt);
+  }
+  function integrateVortex(dt) {
+    const v=vortex, density=v.particles.length/1500;
+    // Crowding strengthens the return field instead of expiring particles in flight.
+    const crowdPull=1+Math.log1p(density)*.4;
+    v.densityAlpha=1/Math.sqrt(1+density);
     const steps=Math.ceil(dt*120), step=dt/steps, scale=Math.min(width,height)/700;
     for (const p of v.particles) {
-      p.px=p.x; p.py=p.y; p.age+=dt; p.lifeProgress+=dt*v.decayRate;
+      p.px=p.x; p.py=p.y;
       for(let j=0;j<steps;j++) {
-        // Curve the actual flight path: tilting velocity at the origin alone
-        // still looks like a straight spoke once the particle moves away.
-        const age = p.age-dt+(j+.5)*step;
-        const turn = p.turnRate * Math.exp(-age/.65) * step;
-        const cos = Math.cos(turn), sin = Math.sin(turn), vx = p.vx;
-        p.vx = vx*cos-p.vy*sin; p.vy = vx*sin+p.vy*cos;
-        const d=Math.max(1,Math.hypot(p.x,p.y)), nx=-p.x/d, ny=-p.y/d;
-        const gravity=(180/p.mass)*(1-v.pulse*1.8)*scale;
-        // Tangential force tapers near the core to allow eventual absorption.
-        const swirl=65*v.rotationSpeed*v.direction*(1+v.pulse*3)*Math.min(1,d/100)*scale;
-        const drag=Math.pow(.97,step*60);
+        p.age+=step;
+        const turn=p.turnRate*Math.exp(-p.age/.65)*step;
+        const cos=Math.cos(turn),sin=Math.sin(turn),vx=p.vx;
+        p.vx=vx*cos-p.vy*sin;p.vy=vx*sin+p.vy*cos;
+        const d=Math.max(1,Math.hypot(p.x,p.y)),nx=-p.x/d,ny=-p.y/d;
+        // A restoring spring grows with distance, so fast launches turn back.
+        // Tangential forcing decays with age to avoid a permanent stable orbit.
+        const gravity=(200/p.mass*scale+d*1.4)*crowdPull;
+        const swirl=160*v.rotationSpeed*v.direction*Math.min(1,d/120)*scale *
+          Math.exp(-Math.max(0,p.age-.6)/2)*(1+v.pulse*.5);
+        const drag=Math.pow(.98,step*60);
         p.vx=(p.vx+(nx*gravity-ny*swirl)*step)*drag;
         p.vy=(p.vy+(ny*gravity+nx*swirl)*step)*drag;
-        p.x+=p.vx*step; p.y+=p.vy*step;
+        p.x+=p.vx*step;p.y+=p.vy*step;
+        const distance=Math.hypot(p.x,p.y);
+        p.maxDistance=Math.max(p.maxDistance,distance);
+        if(p.x*p.vx+p.y*p.vy<0 && (p.maxDistance>20 || p.age>.5)) p.returning=true;
+        if(p.returning && distance<=12) {
+          p.finishReason='absorbed';v.absorbed++;break;
+        }
+      }
+      if(!p.finishReason && (p.age>=p.life || !Number.isFinite(p.x+p.y+p.vx+p.vy))) {
+        p.finishReason='expired';v.expired++;
       }
     }
-    v.particles=v.particles.filter(p=>p.lifeProgress<p.life && !(p.age>.65 && Math.hypot(p.x,p.y)<12));
+    v.particles=v.particles.filter(p=>!p.finishReason);
   }
   function drawVortex() {
     const v=vortex;
@@ -1612,9 +1621,9 @@
     ctx.globalCompositeOperation='lighter'; ctx.lineCap='round';
     for(const p of v.particles) {
       const d=Math.hypot(p.x,p.y), speed=Math.hypot(p.vx,p.vy);
-      const returning=p.age>.35 && p.x*p.vx+p.y*p.vy<0;
+      const returning=p.returning;
       const r=Math.max(.25,p.radius*(returning ? clamp(d/100,.08,1) : 1));
-      const alpha=clamp(d/25,0,1)*Math.min(1,(p.life-p.lifeProgress)/.8);
+      const alpha=clamp((d-8)/18,0,1);
       const hue=(v.hue+p.f*120)%360;
       const light=50+25*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
       ctx.globalCompositeOperation='lighter';
