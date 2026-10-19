@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.39';
+  const VERSION = '2026.10.19.40';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1450,11 +1450,11 @@
   }
 
   // Positions are relative to the core, so rotation and resize preserve the field.
-  const vortex = { particles: [], previous: new Float32Array(1434), levels: [],
+  const vortex = { particles: [], previous: new Float32Array(48), windowPeaks: new Float32Array(48), analysisElapsed: 0, levels: [],
     average: 0, bass: .01, pulse: 0, beats: 0, direction: 1, hue: 210,
     targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true };
   function resetVortex() {
-    vortex.particles.length = 0; vortex.previous.fill(0); vortex.levels.length = 0;
+    vortex.particles.length = 0; vortex.previous.fill(0); vortex.windowPeaks.fill(0); vortex.analysisElapsed = 0; vortex.levels.length = 0;
     Object.assign(vortex, { average: 0, bass: .01, pulse: 0, beats: 0,
       direction: 1, hue: 210, targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true });
   }
@@ -1491,7 +1491,7 @@
       ? clamp(rhythm.bpm / 120, .5, 2) : 1;
     v.rotationSpeed += (tempoSpeed-v.rotationSpeed) * (1-Math.exp(-dt/2));
     v.rotation += dt * .12 * v.rotationSpeed;
-    const count = demo ? 358 : Math.min(v.previous.length, Math.floor(bins.length * .7));
+    const count = demo ? 358 : Math.min(1434, Math.floor(bins.length * .7));
     let sum = 0, bass = 0, bassCount = 0;
     for (let i=0; i<count; i++) {
       const value = demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
@@ -1509,21 +1509,38 @@
     if (rhythm.beat && rhythm.tracking) triggerVortexBeat(rhythm.beatInBar === 0);
     else if (!rhythm.tracking && bass > Math.max(.035,v.bass*1.45)) triggerVortexBeat();
     v.bass += (bass-v.bass)*(1-Math.exp(-dt/1.5));
-    // Every analysed bin with a positive attack can emit; there is no count cap.
-    for (let i=0; i<count; i++) {
-      const value=demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
-      const attack=Math.max(0,value-v.previous[i])*gain;
-      v.previous[i]=value;
-      if (attack > .065) {
-        // Soft compression retains differences that a hard clamp erased.
-        // Partial gain compensation keeps overall loudness differences audible
-        // in the motion instead of normalising every broadband burst alike.
-        const energy = value * Math.sqrt(gain);
-        const volume = energy / (energy + .4);
-        // Express the positive slope per 60 Hz reference frame for stable angles.
-        const slope = attack / Math.max(.001, dt * 60);
-        emitVortex(i/Math.max(1,count-1),volume,slope/(slope+.25));
+    // Pool neighbouring FFT bins into 48 progressively wider frequency bands.
+    // Peak-hold within each 80 ms window preserves brief attacks between samples.
+    const bandCount = v.previous.length;
+    let first = 0;
+    for (let band=0; band<bandCount; band++) {
+      const end = band + 1 + Math.floor((count-bandCount) *
+        Math.expm1((band+1)/bandCount*4) / Math.expm1(4));
+      let squares = 0;
+      for (let i=first; i<end; i++) {
+        const value = demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
+        squares += value*value;
       }
+      const level = Math.sqrt(squares / Math.max(1,end-first));
+      v.windowPeaks[band] = Math.max(v.windowPeaks[band], level);
+      first = end;
+    }
+    v.analysisElapsed += dt;
+    if (v.analysisElapsed >= .08 - 1e-6) {
+      const windowDuration = v.analysisElapsed;
+      for (let band=0; band<bandCount; band++) {
+        const value = v.windowPeaks[band];
+        const attack = Math.max(0,value-v.previous[band])*gain;
+        v.previous[band] = value;
+        if (attack > .065) {
+          // Partial gain compensation preserves overall loudness differences.
+          const energy = value * Math.sqrt(gain);
+          const volume = energy / (energy + .4);
+          const slope = attack / Math.max(.001,windowDuration*60);
+          emitVortex(band/(bandCount-1),volume,slope/(slope+.25));
+        }
+      }
+      v.windowPeaks.fill(0); v.analysisElapsed = 0;
     }
     v.idle += dt;
     if (mean < .015 && v.idle > .12) { emitVortex(Math.random(),.08,.02,true); v.idle=0; }

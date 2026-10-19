@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.39'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.40'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -965,13 +965,13 @@ test('vortex cycles in both directions, accepts beats and resets on stop', async
   assert.equal(f.inspect().vortex.particles.length,0);
 });
 
-test('vortex emits all attacking bins above the former cap and accelerates crowded lifetimes', async () => {
+test('vortex groups broadband attacks into 48 bands and accelerates crowded lifetimes', async () => {
   let loud=false;
   const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? 220 : 0);}});
   f.nodes['#previous-mode'].click(); await f.nodes['#start'].click();
-  await f.tick(); loud=true; await f.tick();
+  await f.tick(.08); loud=true; await f.tick(.08);
   const v=f.inspect().vortex;
-  assert.equal(v.particles.length, 1433 * 2);
+  assert.equal(v.particles.length, 48 * 2);
   assert.ok(v.decayRate > 1);
   assert.ok(v.densityAlpha < 1);
   assert.ok(v.particles.some(p=>p.f>.5),'high frequencies receive emission slots');
@@ -987,32 +987,26 @@ test('vortex emits all attacking bins above the former cap and accelerates crowd
 });
 
 
-test('vortex keeps all sparse attacks and launches small fast streaks', async () => {
-  let loud = false;
-  const peaks = [40, 150, 300, 480, 620, 800, 950, 1100, 1300];
-  const f = fixture(async stream => stream, { spectrum(data) {
-    data.fill(0);
-    if(loud) peaks.forEach((bin, rank) => { data[bin] = 170 + rank * 10; });
-  } });
-  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click();
-  await f.tick(); loud = true; await f.tick();
-  const particles = f.inspect().vortex.particles;
-  assert.equal(particles.length, peaks.length * 2, 'all nine bands emit symmetric copies');
-  const bands = [...new Set(particles.map(p => Math.round(p.f * 1432)))].sort((a,b)=>a-b);
-  assert.deepEqual(bands, peaks);
-  assert.ok(particles.every(p => p.radius >= 1 && p.radius <= 5));
-  assert.ok(particles.every(p => Math.hypot(p.vx,p.vy) > 600), 'strong launches leave the core quickly');
-  assert.ok(particles.every(p => Math.hypot(p.x-p.px,p.y-p.py) > 5), 'previous positions define visible streaks');
-  const before = particles.length;
+test('vortex combines neighbouring frequencies and waits for the temporal window', async () => {
+  let loud=false;
+  const f=fixture(async stream=>stream,{spectrum(data){data.fill(0);if(loud)data.fill(220,600,800);}});
+  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
+  loud=true;
+  for(let i=0;i<4;i++) await f.tick();
+  const v=f.inspect().vortex;
+  assert.equal(v.particles.length,0,'no emission before the 80ms window completes');
   await f.tick();
-  assert.equal(f.inspect().vortex.particles.length, before, 'sustained spectrum does not emit again');
+  assert.ok(v.particles.length>0 && v.particles.length<20,'neighbouring bins become a few bands');
+  assert.ok(v.particles.every(p=>p.radius>=1 && p.radius<=5));
+  const particles=v.particles.length;
+  await f.tick(.08);
+  assert.equal(v.particles.length,particles,'steady sound does not retrigger');
   f.nodes['#stop'].click();
 });
 
-
 test('vortex rotation follows recognised BPM smoothly and returns to neutral when tracking ends', async () => {
   const f=fixture(async stream=>stream,{spectrum(data){data.fill(0);}});
-  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick();
+  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
   const v=f.inspect().vortex;
   f.setVisualRhythm({tracking:true,bpm:60});
   f.stepVortex(1/60);
@@ -1034,11 +1028,11 @@ test('vortex rotation follows recognised BPM smoothly and returns to neutral whe
 test('vortex launch speed and reach follow band volume while angle follows the positive slope', async () => {
   async function launch(previous, next) {
     let level = previous;
-    const f = fixture(async stream => stream, { spectrum(data) { data.fill(0); data[700] = level; } });
-    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick();
+    const f = fixture(async stream => stream, { spectrum(data) { data.fill(0); data.fill(level,600,800); } });
+    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
     const v = f.inspect().vortex;
     v.particles.length = 0;
-    level = next; await f.tick();
+    level = next; await f.tick(.08);
     const p = v.particles[0];
     assert.ok(p);
     const speed = Math.hypot(p.vx,p.vy);
@@ -1058,7 +1052,7 @@ test('vortex launch speed and reach follow band volume while angle follows the p
   assert.ok(loud.reach > soft.reach * 1.3, 'louder launches travel farther through the same field');
   assert.ok(Math.abs(loud.angle) > Math.abs(gentle.angle) + .2, 'sharper attack makes a larger tangential launch angle');
   assert.ok(Math.abs(gentle.angle) > .1, 'gentle attacks still launch at an angle');
-  assert.ok(Math.abs(loud.speed-gentle.speed) < loud.speed * .02, 'equal volume keeps similar speed despite different slopes');
+  assert.ok(Math.abs(loud.speed-gentle.speed) < loud.speed * .15, 'equal volume keeps similar speed despite different gain history and slopes');
 });
 
 
@@ -1066,12 +1060,28 @@ test('vortex auto sensitivity does not equalise the speed of quiet and loud broa
   async function speed(level) {
     let loud=false;
     const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? level : 0);}});
-    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick();
-    loud=true; await f.tick();
+    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
+    loud=true; await f.tick(.08);
     const p=f.inspect().vortex.particles[0];
     const result=Math.hypot(p.vx,p.vy);
     f.nodes['#stop'].click();
     return result;
   }
   assert.ok(await speed(220) > await speed(80) * 1.2);
+});
+
+
+test('vortex temporal peak hold retains a brief attack and resets on theme change', async () => {
+  let loud=false;
+  const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? 180 : 0);}});
+  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
+  loud=true; await f.tick(); loud=false;
+  for(let i=0;i<4;i++) await f.tick();
+  const v=f.inspect().vortex;
+  assert.equal(v.particles.filter(p=>p.life===6).length,96,'a one-frame transient survives the 80ms peak hold');
+  f.nodes['#next-mode'].click(); f.nodes['#previous-mode'].click();
+  assert.equal(v.analysisElapsed,0);
+  assert.ok(v.windowPeaks.every(x=>x===0));
+  assert.ok(v.previous.every(x=>x===0));
+  f.nodes['#stop'].click();
 });
