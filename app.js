@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.46';
+  const VERSION = '2026.10.19.47';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1473,9 +1473,10 @@
   window.triggerBeat = triggerVortexBeat;
   function emitVortex(f, volume, attack, speedVolume = volume) {
     const scale = Math.min(width, height) / 700;
-    // All bands share one rotating nozzle. Frequency spreads the velocity,
-    // not the position; no antipodal or quadrant copies are created.
-    const a = vortex.rotation;
+    // Each frequency band owns a distinct slot on the rotating circular launcher.
+    // Keep the highest band one slot short of 2π so it cannot overlap the lowest.
+    // An event emits once, with no antipodal or quadrant copies.
+    const a = vortex.rotation + f*Math.PI*2*(1-1/vortex.previous.length);
     const deflection = .45 + .7*attack;
     const bendDirection = vortex.direction * (attack < .35 ? -1 : 1);
     const heading = a + bendDirection*deflection + (f-.5)*.5;

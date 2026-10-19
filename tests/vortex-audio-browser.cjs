@@ -56,7 +56,7 @@ const slowLarge=await page.evaluate(async()=>{
  return found;
 });
 await level(0);await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
-// Repeated real audio attacks leave a pattern from the rotating single nozzle.
+// Repeated real audio attacks leave a pattern from the rotating circular launcher.
 const pattern=await page.evaluate(async()=>{
  const {context,bus}=testAudio,start=context.currentTime+.05;
  for(let i=0;i<12;i++){

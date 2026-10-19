@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.46'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.47'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -1088,19 +1088,31 @@ test('vortex raw-audio gentle bass growth can emit a large slow particle, not ju
 });
 
 
-test('vortex emits one particle per event from a common rotating point without point-symmetric copies',async()=>{
+test('vortex assigns each frequency a slot and rotates the entire launcher without symmetric copies',async()=>{
   const {f,v}=await vortexScene();
   v.rotation=.7;
-  f.emitVortex(0,.8,.3);f.emitVortex(1,.8,.8);
-  assert.equal(v.particles.length,2,'two events create two particles, not symmetric pairs');
-  const [bass,treble]=v.particles;
-  assert.equal(bass.x,treble.x);assert.equal(bass.y,treble.y);
-  assert.notEqual(Math.atan2(bass.vy,bass.vx),Math.atan2(treble.vy,treble.vx),'frequency and attack shape the departure angle');
+  f.emitVortex(.25,.8,.3);f.emitVortex(.75,.8,.8);
+  assert.equal(v.particles.length,2,'two events create two particles, not symmetric copies');
+  const [low,high]=v.particles;
+  assert.ok(Math.hypot(low.x-high.x,low.y-high.y)>20,'different bands own different points on the circle');
+  const start=v.rotation;
   for(let i=0;i<60;i++)f.updateVortexEmitter(1/60);
-  f.emitVortex(.5,.8,.5);const later=v.particles.at(-1);
-  assert.ok(Math.hypot(later.x-bass.x,later.y-bass.y)>3,'successive events trace the rotating nozzle');
+  f.emitVortex(.25,.8,.3);const later=v.particles.at(-1);
+  const rotation=Math.atan2(low.x*later.y-low.y*later.x,low.x*later.x+low.y*later.y);
+  assert.ok(Math.abs(rotation-(v.rotation-start))<1e-6,'the frequency slot rotates with the shared launcher');
   v.beats=16;const before=v.particles.length;f.emitVortex(.5,.8,.5);
   assert.equal(v.particles.length,before+1,'section changes never restore symmetric copies');
+  f.nodes['#stop'].click();
+});
+test('vortex simultaneous full-spectrum sound emits once from every direction with 48 distinct slots',async()=>{
+  const {f,v,set,sample}=await vortexScene({signal(data,level){data.fill(level);}});
+  set(.01);await sample();
+  assert.equal(v.particles.length,48);
+  const angles=v.particles.map(p=>(Math.atan2(p.py,p.px)+Math.PI*2)%(Math.PI*2)).sort((a,b)=>a-b);
+  for(let i=0;i<48;i++) {
+    const gap=(angles[(i+1)%48]-angles[i]+Math.PI*2)%(Math.PI*2);
+    assert.ok(Math.abs(gap-Math.PI*2/48)<1e-6,'bands evenly cover the entire circle without a duplicate endpoint');
+  }
   f.nodes['#stop'].click();
 });
 test('vortex nozzle rotation follows visible particle count smoothly and excludes offscreen particles',async()=>{
