@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.43';
+  const VERSION = '2026.10.19.44';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1457,11 +1457,11 @@
   // Positions are relative to the core, so rotation and resize preserve the field.
   const vortex = { particles: [], previous: new Float32Array(48), windowPeaks: new Float32Array(48), analysisElapsed: 0, reference: 0, bandCooldowns: new Float32Array(48), lastEmitted: new Float32Array(48), levels: [],
     average: 0, bass: .01, pulse: 0, beats: 0, direction: 1, hue: 210,
-    targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true };
+    targetHue: 210, lastLarge: -1, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true };
   function resetVortex() {
     vortex.particles.length = 0; vortex.previous.fill(0); vortex.windowPeaks.fill(0); vortex.analysisElapsed = 0; vortex.reference = 0; vortex.bandCooldowns.fill(0); vortex.lastEmitted.fill(0); vortex.levels.length = 0;
     Object.assign(vortex, { average: 0, bass: .01, pulse: 0, beats: 0,
-      direction: 1, hue: 210, targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true });
+      direction: 1, hue: 210, targetHue: 210, lastLarge: -1, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true });
   }
   function triggerVortexBeat(isDownbeat = false) {
     if (!running || document.hidden || mode !== 'vortex' || vortex.cooldown > 0) return;
@@ -1481,7 +1481,11 @@
     const bendDirection = vortex.direction * (attack < .35 ? -1 : 1);
     const turnRate = ambient ? 0 : bendDirection * (.9 + 3.1 * attack);
     // Volume controls the visible head, rather than only a faint stroke width.
-    const radius = ambient ? .35 : .45 + 4.55 * Math.pow(volume,.8) * (.8+.2*(1-f));
+    const large = !ambient && f < 1/3 && volume >= .72 && attack >= .4 &&
+      vortex.time-vortex.lastLarge >= .6;
+    if (large) vortex.lastLarge = vortex.time;
+    const baseRadius = ambient ? .35 : .45 + 4.55 * Math.pow(volume,.8) * (.8+.2*(1-f));
+    const radius = baseRadius * (large ? 3 : 1);
     for (let c = 0; c < copies; c++) {
       const a = angle + c * Math.PI * 2 / copies;
       const heading = a + bendDirection * deflection;
@@ -1489,7 +1493,7 @@
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
         vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
-        radius,
+        radius, large,
         mass: 1 + (1-f) * 1.8, turnRate, f, age: 0, lifeProgress: 0, life: ambient ? .6 : 1 + volume });
     }
   }

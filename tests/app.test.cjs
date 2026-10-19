@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.43'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.44'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -988,7 +988,7 @@ test('vortex 48-band and 80ms pooling captures short attacks without a fixed par
   assert.equal(v.particles.length,0);
   set(0);await f.tick();
   assert.equal(v.particles.length,96,'short attack retained and pooled into 48 symmetric pairs');
-  assert.ok(v.particles.every(p=>p.radius>=.45 && p.radius<=5));
+  assert.ok(v.particles.every(p=>p.radius>=.45 && p.radius<=(p.large ? 15 : 5)));
   for(let i=0;i<3;i++){await sample();set(.01);await sample();set(0);await sample();}
   assert.ok(v.particles.length>200,'coarse emission is not a hidden 200-particle cap');
   f.nodes['#stop'].click();
@@ -1024,5 +1024,31 @@ test('vortex does not suppress a stronger onset arriving during a band cooldown'
   set(.008);await sample();
   const stronger=v.particles.filter(p=>!first.has(p));assert.ok(stronger.length>0);
   assert.ok(Math.max(...stronger.map(p=>p.radius))>Math.max(...[...first].map(p=>p.radius))*2);
+  f.nodes['#stop'].click();
+});
+
+
+test('vortex mixes occasional triple-size bass heads with ordinary particles without widening tails',async()=>{
+  const arcs=[];
+  const {f,v,set,sample}=await vortexScene({arcs,signal(data,level){data.fill(level);}});
+  set(.01);await sample();
+  const large=v.particles.filter(p=>p.large),normal=v.particles.filter(p=>!p.large);
+  assert.equal(large.length,2,'one symmetric large pair in the burst');
+  assert.ok(normal.length>large.length,'ordinary particles remain the majority');
+  assert.ok(large.every(p=>p.radius>12 && p.radius<=15));
+  assert.ok(normal.every(p=>p.radius<=5));
+  assert.ok(arcs.some(({args})=>args[2]>12),'large head is actually rendered at triple size');
+  set(0);await sample();set(.01);await sample();
+  assert.equal(v.particles.filter(p=>p.large).length,2,'no repeated large pair within 600ms');
+  set(0);for(let i=0;i<8;i++)await sample();set(.01);await sample();
+  assert.ok(v.particles.filter(p=>p.large).length>2,'a later strong attack can create another large pair');
+  f.nodes['#stop'].click();assert.equal(v.lastLarge,-1);
+});
+test('vortex weak attacks do not create triple-size particles',async()=>{
+  const {f,v,set,sample}=await vortexScene({signal(data,level){data.fill(level);}});
+  set(.01);await sample();set(0);for(let i=0;i<30;i++)await sample();v.particles.length=0;
+  set(.001);await sample();
+  assert.ok(v.particles.length>0);
+  assert.ok(v.particles.every(p=>!p.large && p.radius<=5));
   f.nodes['#stop'].click();
 });
