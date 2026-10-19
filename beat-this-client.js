@@ -53,7 +53,7 @@
       this.context = context; this.source = source; this.inputLevel = new window.BeatThisAudio.AutoLevel();
       if (typeof navigator !== 'undefined' && navigator.serviceWorker) await this.prepareStorage(navigator.serviceWorker);
       if (this.stopped) return;
-      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.19.47', document.baseURI), { type: 'module' });
+      const worker = this.worker = new Worker(new URL('./beat-this-worker.js?v=2026.10.19.48', document.baseURI), { type: 'module' });
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => this.fail('モデル準備がタイムアウトしました（通信・空きメモリを確認）'), 180000);
         this.readyReject = error => { clearTimeout(timer); reject(error); };
@@ -79,7 +79,7 @@
         worker.postMessage({ type: 'load', rate: context.sampleRate });
       });
       if (this.stopped) return;
-      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.19.47', document.baseURI));
+      await context.audioWorklet.addModule(new URL('./beat-this-capture.js?v=2026.10.19.48', document.baseURI));
       if (this.stopped) return;
       this.node = new AudioWorkletNode(context, 'beat-this-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       this.node.port.onmessage = ({ data }) => {

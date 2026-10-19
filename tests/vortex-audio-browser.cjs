@@ -29,7 +29,7 @@ async function sample(value,path){
  const result=await page.evaluate(async()=>{
   let maxRadius=0,maxSpeed=0,count=0;const seen=new Set(),end=performance.now()+320;
   while(performance.now()<end){await new Promise(requestAnimationFrame);for(const p of testState().vortex.particles){if(p.age<.14){seen.add(p);maxRadius=Math.max(maxRadius,p.radius);maxSpeed=Math.max(maxSpeed,Math.hypot(p.vx,p.vy));}}}
-  window.lastCohort=[...seen];return {count:seen.size,radius:maxRadius,speed:maxSpeed};
+  window.lastCohort=[...seen];return {count:seen.size,radius:maxRadius,speed:maxSpeed,hues:[...new Set([...seen].map(p=>Math.floor(p.hue/30)))]};
  });
  await page.screenshot({path});await level(0);
  if(value>=.1){
@@ -37,8 +37,8 @@ async function sample(value,path){
   await page.screenshot({path:path.replace('.png','-returning.png')});
  }
  await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
- const finish=await page.evaluate(()=>({absorbed:testState().vortex.absorbed,expired:testState().vortex.expired,allAbsorbed:lastCohort.every(p=>p.finishReason==='absorbed'),returnTime:Math.max(...lastCohort.map(p=>p.age)),smallReach:Math.max(0,...lastCohort.filter(p=>p.radius<=2.5).map(p=>p.maxDistance))}));
- return {...result,absorbed:finish.absorbed-before.absorbed,expired:finish.expired-before.expired,allAbsorbed:finish.allAbsorbed,returnTime:finish.returnTime,smallReach:finish.smallReach};
+ const finish=await page.evaluate(()=>({absorbed:testState().vortex.absorbed,expired:testState().vortex.expired,allAbsorbed:lastCohort.every(p=>p.finishReason==='absorbed'),returnTime:Math.max(...lastCohort.map(p=>p.age)),smallReach:Math.max(0,...lastCohort.filter(p=>p.radius<=2.5).map(p=>p.maxDistance)),smallCount:lastCohort.filter(p=>p.radius<=2.5).length,smallFar:lastCohort.filter(p=>p.radius<=2.5&&p.maxDistance>195).length}));
+ return {...result,absorbed:finish.absorbed-before.absorbed,expired:finish.expired-before.expired,allAbsorbed:finish.allAbsorbed,returnTime:finish.returnTime,smallReach:finish.smallReach,smallCount:finish.smallCount,smallFar:finish.smallFar};
 }
 await sample(.12,artifact('vortex-audio-calibration.png'));
 // Simulate a large gain in the shared display path: the raw branch must remain independent.
@@ -63,13 +63,13 @@ const pattern=await page.evaluate(async()=>{
   bus.gain.setValueAtTime([.12,.05,.085][i%3],start+i*.25);
   bus.gain.setValueAtTime(0,start+i*.25+.11);
  }
- let maxVisible=0,maxRate=0;const end=performance.now()+3050;
- while(performance.now()<end){await new Promise(requestAnimationFrame);const v=testState().vortex;maxVisible=Math.max(maxVisible,v.visibleCount);maxRate=Math.max(maxRate,v.emitterSpeed);}
- return {maxVisible,maxRate};
+ let maxVisible=0,maxRate=0;const hues=new Set();const end=performance.now()+3050;
+ while(performance.now()<end){await new Promise(requestAnimationFrame);const v=testState().vortex;maxVisible=Math.max(maxVisible,v.visibleCount);maxRate=Math.max(maxRate,v.emitterSpeed);for(const p of v.particles)hues.add(Math.floor(p.hue/45));}
+ return {maxVisible,maxRate,hueSectors:hues.size};
 });
 await page.screenshot({path:artifact('vortex-audio-pattern.png')});
 await level(0);await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
 const result={errors,weak,strong,remaining,slowLarge,pattern};console.log(JSON.stringify(result));
-if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0||!weak.allAbsorbed||!strong.allAbsorbed||weak.expired||strong.expired||!slowLarge.some(p=>p.speed<strong.speed*.6)||strong.smallReach<195||pattern.maxVisible<5||pattern.maxRate<.45)throw new Error('Real AudioContext contrast regression failed');
+if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0||!weak.allAbsorbed||!strong.allAbsorbed||weak.expired||strong.expired||!slowLarge.some(p=>p.speed<strong.speed*.6)||strong.smallReach<350||pattern.maxVisible<5||pattern.maxRate<.45||pattern.hueSectors<4)throw new Error('Real AudioContext contrast regression failed');
 await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

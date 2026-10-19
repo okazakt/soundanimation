@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.47';
+  const VERSION = '2026.10.19.48';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1484,12 +1484,17 @@
     const radius = .45 + 14.55*Math.pow(volume,.9) *
       (.06+.94*Math.pow(1-f,1.3));
     // Bright treble attacks can travel far while retaining very small heads.
-    const speed = (70+1900*speedVolume*speedVolume*(.08+.92*attack*attack)) *
+    const spark=clamp((3-radius)/2,0,1);
+    const sparkKick=1200*spark*Math.sqrt(speedVolume)*attack;
+    const speed = (70+1900*speedVolume*speedVolume*(.08+.92*attack*attack)+sparkKick) *
       (1+2*f)*scale;
+    // Birth colour follows the actual launch heading around the full colour wheel.
+    // Keep it on the particle so older streaks retain their original colour.
+    const hue=((vortex.hue+heading*180/Math.PI)%360+360)%360;
     vortex.particles.push({x:Math.cos(a)*13,y:Math.sin(a)*13,
       px:Math.cos(a)*13,py:Math.sin(a)*13,
       vx:Math.cos(heading)*speed,vy:Math.sin(heading)*speed,
-      radius,mass:1+Math.pow(radius/5,.7)*1.6,turnRate,f,age:0,
+      radius,hue,mass:1+Math.pow(radius/5,.7)*1.6,turnRate,f,age:0,
       maxDistance:13,returning:false,finishReason:null,life:30});
   }
   function updateVortexEmitter(dt) {
@@ -1641,7 +1646,7 @@
       const returning=p.returning;
       const r=Math.max(.25,p.radius*(returning ? clamp(d/100,.08,1) : 1));
       const alpha=clamp((d-8)/18,0,1);
-      const hue=(v.hue+p.f*120)%360;
+      const hue=p.hue;
       const light=50+25*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
       ctx.globalCompositeOperation='lighter';
       ctx.strokeStyle=`hsla(${hue},95%,${Math.min(65,light)}%,${alpha*.18*v.densityAlpha})`;

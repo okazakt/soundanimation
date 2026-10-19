@@ -53,7 +53,7 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { performance: { now: () => now }, Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.updateVortexEmitter = dt => updateVortexEmitter(dt);\n  window.emitVortex = (f,v,a) => emitVortex(f,v,a);\n  window.integrateVortex = dt => integrateVortex(dt);\n  window.stepVortex = dt => updateVortex(dt);\n  window.inspect = () => ({ vortex, flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawRadiation = () => drawBeatRadiation();\n  window.drawFlocks = () => drawFlocks();\n  window.setInputLevel = value => { latestInputLevel=value; };\n  window.setVisualRhythm = value => { beatThisClient={stopped:false,stop(){}};rhythm={...basicRhythm,...value}; };\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.updateVortexEmitter = dt => updateVortexEmitter(dt);\n  window.emitVortex = (...args) => emitVortex(...args);\n  window.integrateVortex = dt => integrateVortex(dt);\n  window.stepVortex = dt => updateVortex(dt);\n  window.inspect = () => ({ vortex, flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawRadiation = () => drawBeatRadiation();\n  window.drawFlocks = () => drawFlocks();\n  window.setInputLevel = value => { latestInputLevel=value; };\n  window.setVisualRhythm = value => { beatThisClient={stopped:false,stop(){}};rhythm={...basicRhythm,...value}; };\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
   return { updateVortexEmitter:dt=>window.updateVortexEmitter(dt), emitVortex:(...args)=>window.emitVortex(...args), integrateVortex:dt=>window.integrateVortex(dt), stepVortex: dt => window.stepVortex(dt), triggerBeat: value => window.triggerBeat(value), nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     drawRadiation: () => window.drawRadiation(),
@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.47'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.48'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -1136,5 +1136,40 @@ test('vortex sharp treble creates small far-reaching particles which still retur
   for(let i=0;i<1440&&v.particles.length;i++)f.integrateVortex(1/60);
   assert.ok(p.maxDistance>195,'a small head reaches beyond the phone half-width');
   assert.equal(p.finishReason,'absorbed');assert.equal(v.expired,0);
+  f.nodes['#stop'].click();
+});
+
+
+test('vortex moderate small-particle attacks travel far, not only extreme treble spikes',async()=>{
+  const {f,v}=await vortexScene();
+  const particles=[];
+  for(const [band,volume,attack,speedVolume] of [[.85,.25,.35,.65],[.95,.4,.3,.65],[1,.5,.25,.7]]) {
+    f.emitVortex(band,volume,attack,speedVolume);particles.push(v.particles.at(-1));
+  }
+  assert.ok(particles.every(p=>p.radius<1.5));
+  for(let i=0;i<1440&&v.particles.length;i++)f.integrateVortex(1/60);
+  for(const p of particles){assert.ok(p.maxDistance>195,'a moderate small-particle attack reaches the phone edge');assert.equal(p.finishReason,'absorbed');}
+  assert.equal(v.expired,0);f.nodes['#stop'].click();
+});
+test('vortex birth colour follows launch angle and preserves older particle colours',async()=>{
+  const {f,v}=await vortexScene();
+  f.emitVortex(.4,.8,.15);const gentle=v.particles.at(-1);
+  f.emitVortex(.4,.8,.85);const sharp=v.particles.at(-1);
+  const colourDistance=(a,b)=>Math.abs(((a-b+540)%360)-180);
+  assert.ok(colourDistance(gentle.hue,sharp.hue)>80,'different departure angles produce visibly different hues');
+  const original=sharp.hue;
+  v.rotation+=Math.PI/2;
+  f.emitVortex(.4,.8,.85);const rotated=v.particles.at(-1);
+  assert.ok(Math.abs(colourDistance(rotated.hue,sharp.hue)-90)<1e-6,'rotating the launcher by 90 degrees rotates the birth hue by 90 degrees');
+  v.hue+=120;for(let i=0;i<30;i++)f.integrateVortex(1/60);
+  assert.equal(sharp.hue,original,'existing streaks are not recoloured by palette or motion changes');
+  f.nodes['#stop'].click();
+});
+test('vortex simultaneous all-band launch spans the whole colour wheel',async()=>{
+  const {f,v,set,sample}=await vortexScene({signal(data,level){data.fill(level);}});
+  set(.01);await sample();
+  const sectors=new Set(v.particles.map(p=>Math.floor(p.hue/60)));
+  assert.equal(sectors.size,6,'all six hue sectors appear in a full-spectrum burst');
+  assert.ok(v.particles.every(p=>Number.isFinite(p.hue)&&p.hue>=0&&p.hue<360));
   f.nodes['#stop'].click();
 });
