@@ -63,13 +63,13 @@ const pattern=await page.evaluate(async()=>{
   bus.gain.setValueAtTime([.12,.05,.085][i%3],start+i*.25);
   bus.gain.setValueAtTime(0,start+i*.25+.11);
  }
- let maxVisible=0,maxRate=0;const hues=new Set();const end=performance.now()+3050;
- while(performance.now()<end){await new Promise(requestAnimationFrame);const v=testState().vortex;maxVisible=Math.max(maxVisible,v.visibleCount);maxRate=Math.max(maxRate,v.emitterSpeed);for(const p of v.particles)hues.add(Math.floor(p.hue/45));}
- return {maxVisible,maxRate,hueSectors:hues.size};
+ let maxVisible=0,maxRate=0;const hues=new Set();const colours=new Map();const end=performance.now()+3050;
+ while(performance.now()<end){await new Promise(requestAnimationFrame);const v=testState().vortex;maxVisible=Math.max(maxVisible,v.visibleCount);maxRate=Math.max(maxRate,v.emitterSpeed);for(const p of v.particles){hues.add(Math.floor(p.hue/45));colours.set(p,p.accent);}}
+ return {maxVisible,maxRate,hueSectors:hues.size,normal:[...colours.values()].filter(v=>!v).length,accents:[...colours.values()].filter(Boolean).length};
 });
 await page.screenshot({path:artifact('vortex-audio-pattern.png')});
 await level(0);await page.waitForFunction(()=>testState().vortex.particles.length===0,null,{timeout:24000});
 const result={errors,weak,strong,remaining,slowLarge,pattern};console.log(JSON.stringify(result));
-if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0||!weak.allAbsorbed||!strong.allAbsorbed||weak.expired||strong.expired||!slowLarge.some(p=>p.speed<strong.speed*.6)||strong.smallReach<350||pattern.maxVisible<5||pattern.maxRate<.45||pattern.hueSectors<4)throw new Error('Real AudioContext contrast regression failed');
+if(errors.length||!weak.count||!strong.count||strong.speed<weak.speed*3||strong.radius<weak.radius*1.7||remaining!==0||!weak.allAbsorbed||!strong.allAbsorbed||weak.expired||strong.expired||!slowLarge.some(p=>p.speed<strong.speed*.6)||strong.smallReach<350||pattern.maxVisible<5||pattern.maxRate<.45||pattern.normal<pattern.accents*4)throw new Error('Real AudioContext contrast regression failed');
 await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

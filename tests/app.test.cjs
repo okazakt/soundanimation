@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.48'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.49'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -1151,25 +1151,27 @@ test('vortex moderate small-particle attacks travel far, not only extreme treble
   for(const p of particles){assert.ok(p.maxDistance>195,'a moderate small-particle attack reaches the phone edge');assert.equal(p.finishReason,'absorbed');}
   assert.equal(v.expired,0);f.nodes['#stop'].click();
 });
-test('vortex birth colour follows launch angle and preserves older particle colours',async()=>{
-  const {f,v}=await vortexScene();
-  f.emitVortex(.4,.8,.15);const gentle=v.particles.at(-1);
-  f.emitVortex(.4,.8,.85);const sharp=v.particles.at(-1);
-  const colourDistance=(a,b)=>Math.abs(((a-b+540)%360)-180);
-  assert.ok(colourDistance(gentle.hue,sharp.hue)>80,'different departure angles produce visibly different hues');
-  const original=sharp.hue;
-  v.rotation+=Math.PI/2;
-  f.emitVortex(.4,.8,.85);const rotated=v.particles.at(-1);
-  assert.ok(Math.abs(colourDistance(rotated.hue,sharp.hue)-90)<1e-6,'rotating the launcher by 90 degrees rotates the birth hue by 90 degrees');
-  v.hue+=120;for(let i=0;i<30;i++)f.integrateVortex(1/60);
-  assert.equal(sharp.hue,original,'existing streaks are not recoloured by palette or motion changes');
+
+test('vortex colour stays near the evolving base with rare distant accents and stable old streaks',async()=>{
+  const {f,v}=await vortexScene();const distance=(a,b)=>Math.abs(((a-b+540)%360)-180);
+  v.hue=355;
+  for(let i=0;i<2000;i++){v.rotation=i*.1;f.emitVortex((i%48)/47,.8,.6);}
+  const normal=v.particles.filter(p=>!p.accent),accents=v.particles.filter(p=>p.accent);
+  assert.ok(normal.length>1840&&normal.length<1960,'the base palette dominates roughly 95 percent of births');
+  assert.ok(accents.length>40&&accents.length<160,'a small minority are accent colours');
+  assert.ok(normal.every(p=>distance(p.hue,355)<=14.000001),'normal particles stay within a narrow base palette, including hue wrap');
+  assert.ok(accents.every(p=>distance(p.hue,355)>=95&&distance(p.hue,355)<=145),'rare accents are visibly different');
+  assert.ok(v.particles.every(p=>p.hue>=0&&p.hue<360));
+  const old=v.particles[0],oldHue=old.hue;
+  v.hue=120;f.emitVortex(.5,.8,.6);const latest=v.particles.at(-1);
+  if(!latest.accent)assert.ok(distance(latest.hue,120)<=14.000001);
+  assert.equal(old.hue,oldHue,'existing heads and tails keep their birth colour');
   f.nodes['#stop'].click();
 });
-test('vortex simultaneous all-band launch spans the whole colour wheel',async()=>{
-  const {f,v,set,sample}=await vortexScene({signal(data,level){data.fill(level);}});
-  set(.01);await sample();
-  const sectors=new Set(v.particles.map(p=>Math.floor(p.hue/60)));
-  assert.equal(sectors.size,6,'all six hue sectors appear in a full-spectrum burst');
-  assert.ok(v.particles.every(p=>Number.isFinite(p.hue)&&p.hue>=0&&p.hue<360));
-  f.nodes['#stop'].click();
+test('vortex base palette progresses smoothly with time without recolouring old particles',async()=>{
+  const {f,v}=await vortexScene();
+  f.emitVortex(.5,.8,.6);const old=v.particles[0],hue=old.hue,start=v.hue;
+  for(let i=0;i<600;i++)f.stepVortex(1/60);
+  assert.ok(v.hue>start+10,'base palette continues its time transition');
+  assert.equal(old.hue,hue);f.nodes['#stop'].click();
 });

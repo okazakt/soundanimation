@@ -22,7 +22,7 @@
     detail.textContent = '初回は約23MBを取得して端末に保存します。準備が完了すると操作できます。';
     detail.removeAttribute('role'); retry.hidden = true; notify();
     if (!window.Worker) { fail('このブラウザはモデルの準備に対応していません。'); return; }
-    const current = worker = new Worker(new URL('./model-setup-worker.js?v=2026.10.19.48', document.baseURI));
+    const current = worker = new Worker(new URL('./model-setup-worker.js?v=2026.10.19.49', document.baseURI));
     worker.onerror = () => { if (worker === current) fail('準備を開始できませんでした。接続を確認して再試行してください。'); };
     worker.onmessage = ({ data }) => {
       if (worker !== current) return;
