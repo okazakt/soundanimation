@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.42';
+  const VERSION = '2026.10.19.43';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -253,6 +253,7 @@
   }
   let width = 1, height = 1, running = false, starting = false, demo = false;
   let audio = null, stream = null, source = null, inputGainNode = null, analyser = null, bins = null, bands = [];
+  let vortexAnalyser = null, vortexBins = null;
   let environment = .15, elapsed = 0, previous = 0, frameId = 0, generation = 0;
   const signals = new Float32Array(N);
   const HISTORY_SIZE = 2048;
@@ -372,7 +373,11 @@
       stream = localStream;
       analyser = localAudio.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = .15;
       bins = new Uint8Array(analyser.frequencyBinCount);
+      vortexAnalyser = localAudio.createAnalyser();
+      vortexAnalyser.fftSize = 4096; vortexAnalyser.smoothingTimeConstant = 0;
+      vortexBins = new Float32Array(vortexAnalyser.frequencyBinCount);
       source = localAudio.createMediaStreamSource(stream);
+      source.connect(vortexAnalyser);
       inputGainNode=localAudio.createGain(); source.connect(inputGainNode); inputGainNode.connect(analyser);
       // Intentionally do not connect the microphone to speakers.
       configureBands(); demo = false;
@@ -406,7 +411,7 @@
     source?.disconnect(); source = null; inputGainNode?.disconnect(); inputGainNode=null;
     stream?.getTracks().forEach(track => track.stop()); stream = null;
     if (audio && audio.state !== 'closed') audio.close().catch(() => {});
-    audio = null; analyser = null; bins = null;
+    audio = null; analyser = null; bins = null; vortexAnalyser = null; vortexBins = null;
     if (wake) { wake.release().catch(() => {}); wake = null; }
     clearTimeout(noticeTimer); notice.classList.remove('visible');
     startButton.disabled = selectionRequired || !setupComplete(); startButton.textContent = '開始'; stopButton.disabled = true;
@@ -1450,11 +1455,11 @@
   }
 
   // Positions are relative to the core, so rotation and resize preserve the field.
-  const vortex = { particles: [], previous: new Float32Array(48), windowPeaks: new Float32Array(48), analysisElapsed: 0, levels: [],
+  const vortex = { particles: [], previous: new Float32Array(48), windowPeaks: new Float32Array(48), analysisElapsed: 0, reference: 0, bandCooldowns: new Float32Array(48), lastEmitted: new Float32Array(48), levels: [],
     average: 0, bass: .01, pulse: 0, beats: 0, direction: 1, hue: 210,
     targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true };
   function resetVortex() {
-    vortex.particles.length = 0; vortex.previous.fill(0); vortex.windowPeaks.fill(0); vortex.analysisElapsed = 0; vortex.levels.length = 0;
+    vortex.particles.length = 0; vortex.previous.fill(0); vortex.windowPeaks.fill(0); vortex.analysisElapsed = 0; vortex.reference = 0; vortex.bandCooldowns.fill(0); vortex.lastEmitted.fill(0); vortex.levels.length = 0;
     Object.assign(vortex, { average: 0, bass: .01, pulse: 0, beats: 0,
       direction: 1, hue: 210, targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true });
   }
@@ -1475,18 +1480,17 @@
     // Gentle and sharp attacks peel away on opposite sides of the radial ray.
     const bendDirection = vortex.direction * (attack < .35 ? -1 : 1);
     const turnRate = ambient ? 0 : bendDirection * (.9 + 3.1 * attack);
-    // Expand the size contrast without restoring the oversized glowing blobs.
-    const radius = ambient ? .35 : .35 + (.55 + 4.1 * Math.pow(1-f,1.7)) *
-      (.2 + .8 * Math.pow(volume,1.3)) * (.6 + .4 * attack);
+    // Volume controls the visible head, rather than only a faint stroke width.
+    const radius = ambient ? .35 : .45 + 4.55 * Math.pow(volume,.8) * (.8+.2*(1-f));
     for (let c = 0; c < copies; c++) {
       const a = angle + c * Math.PI * 2 / copies;
       const heading = a + bendDirection * deflection;
-      const speed = (ambient ? 35 : 35 + 3600 * Math.pow(volume, 3)) * scale;
+      const speed = (ambient ? 35 : 40 + 1900 * Math.pow(volume, 2)) * scale;
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
         vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
         radius,
-        mass: 1 + (1-f) * 1.8, turnRate, f, age: 0, lifeProgress: 0, life: ambient ? 5 : 6 });
+        mass: 1 + (1-f) * 1.8, turnRate, f, age: 0, lifeProgress: 0, life: ambient ? .6 : 1 + volume });
     }
   }
   function updateVortex(dt) {
@@ -1497,10 +1501,16 @@
       ? clamp(rhythm.bpm / 120, .5, 2) : 1;
     v.rotationSpeed += (tempoSpeed-v.rotationSpeed) * (1-Math.exp(-dt/2));
     v.rotation += dt * .12 * v.rotationSpeed;
-    const count = demo ? 358 : Math.min(1434, Math.floor(bins.length * .7));
+    if (!demo) {
+      // A separate, pre-gain analyser supplies true linear amplitudes. Byte FFT
+      // values are decibels and must not be treated as proportional loudness.
+      vortexAnalyser.getFloatFrequencyData(vortexBins);
+      for(let i=0;i<vortexBins.length;i++) vortexBins[i]=Math.pow(10,vortexBins[i]/20);
+    }
+    const count = demo ? 358 : Math.min(1434, Math.floor(vortexBins.length * .7));
     let sum = 0, bass = 0, bassCount = 0;
     for (let i=0; i<count; i++) {
-      const value = demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
+      const value = demo ? rawEnergies[Math.floor(i/count*N)]*.01 : vortexBins[i];
       sum += value;
       const hz = demo ? i * 48000/4096 : i * audio.sampleRate/analyser.fftSize;
       if (hz >= 20 && hz <= 150) { bass += value; bassCount++; }
@@ -1510,7 +1520,7 @@
     let duration = v.levels.reduce((a,b)=>a+b.dt,0);
     while (duration > 3 && v.levels.length > 1) duration -= v.levels.shift().dt;
     v.average = v.levels.reduce((a,b)=>a+b.value*b.dt,0)/Math.max(.001,duration);
-    const gain = clamp(.18/Math.max(.015,v.average),.35,6);
+
     bass /= Math.max(1,bassCount);
     if (rhythm.beat && rhythm.tracking) triggerVortexBeat(rhythm.beatInBar === 0);
     else if (!rhythm.tracking && bass > Math.max(.035,v.bass*1.45)) triggerVortexBeat();
@@ -1524,7 +1534,7 @@
         Math.expm1((band+1)/bandCount*4) / Math.expm1(4));
       let squares = 0;
       for (let i=first; i<end; i++) {
-        const value = demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
+        const value = demo ? rawEnergies[Math.floor(i/count*N)]*.01 : vortexBins[i];
         squares += value*value;
       }
       const level = Math.sqrt(squares / Math.max(1,end-first));
@@ -1534,22 +1544,31 @@
     v.analysisElapsed += dt;
     if (v.analysisElapsed >= .08 - 1e-6) {
       const windowDuration = v.analysisElapsed;
+      const peak = Math.max(...v.windowPeaks);
+      if (peak > .00001) {
+        v.reference = Math.max(.0001,peak,v.reference*Math.exp(-windowDuration/12));
+      }
+      const reference = Math.max(.0001,v.reference);
       for (let band=0; band<bandCount; band++) {
         const value = v.windowPeaks[band];
-        const attack = Math.max(0,value-v.previous[band])*gain;
+        const previous = v.previous[band];
+        const rise = Math.max(0,value-previous);
+        const attack = rise/reference;
+        const novelty = rise/Math.max(reference*.08,previous);
         v.previous[band] = value;
-        if (attack > .065) {
-          // Partial gain compensation preserves overall loudness differences.
-          const energy = value * Math.sqrt(gain);
-          const volume = energy / (energy + .4);
+        v.bandCooldowns[band] = Math.max(0,v.bandCooldowns[band]-windowDuration);
+        const stronger = value > v.lastEmitted[band]*1.8;
+        if (value > .00001 && attack > .035 && novelty > .25 && (v.bandCooldowns[band] === 0 || stronger)) {
+          const volume = clamp(value/reference,0,1);
           const slope = attack / Math.max(.001,windowDuration*60);
           emitVortex(band/(bandCount-1),volume,slope/(slope+.06));
+          v.bandCooldowns[band] = .18; v.lastEmitted[band] = value;
         }
       }
       v.windowPeaks.fill(0); v.analysisElapsed = 0;
     }
     v.idle += dt;
-    if (mean < .015 && v.idle > .12) { emitVortex(Math.random(),.08,.02,true); v.idle=0; }
+    // Real silence does not generate dummy particles.
     // Crowding accelerates lifetime consumption, including existing particles.
     // This is a continuous density response, not a particle admission limit.
     const density = v.particles.length / 1500;
@@ -1589,14 +1608,22 @@
     ctx.globalCompositeOperation='lighter'; ctx.lineCap='round';
     for(const p of v.particles) {
       const d=Math.hypot(p.x,p.y), speed=Math.hypot(p.vx,p.vy);
-      const r=Math.max(.25,p.radius*clamp(d/100,.08,1));
+      const returning=p.age>.35 && p.x*p.vx+p.y*p.vy<0;
+      const r=Math.max(.25,p.radius*(returning ? clamp(d/100,.08,1) : 1));
       const alpha=clamp(d/25,0,1)*Math.min(1,(p.life-p.lifeProgress)/.8);
       const hue=(v.hue+p.f*120)%360;
       const light=50+25*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
-      const sizeAlpha = Math.sqrt(1/Math.max(1,r/1.4));
-      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.28*v.densityAlpha*sizeAlpha})`; ctx.lineWidth=r*2;
+      ctx.globalCompositeOperation='lighter';
+      ctx.strokeStyle=`hsla(${hue},95%,${Math.min(65,light)}%,${alpha*.18*v.densityAlpha})`;
+      ctx.lineWidth=Math.min(2.4,.5+r*.65);
       ctx.beginPath(); ctx.moveTo(p.px,p.py); ctx.lineTo(p.x,p.y); ctx.stroke();
+      // Crisp coloured heads use normal compositing, so large particles remain
+      // visible without accumulating into white additive blobs.
+      ctx.globalCompositeOperation='source-over';
+      ctx.fillStyle=`hsla(${hue},95%,60%,${alpha*.8*v.densityAlpha})`;
+      ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();
     }
+    ctx.globalCompositeOperation='lighter';
     const radius=12+Math.min(.5,v.average)*12+v.pulse*8;
     for(let i=3;i>0;i--) {
       ctx.strokeStyle=`hsla(${v.hue%360},95%,65%,${.12/i+v.pulse*.08})`;

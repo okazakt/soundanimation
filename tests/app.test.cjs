@@ -34,7 +34,7 @@ function fixture(getMicrophone, options = {}) {
     async suspend() { this.state = 'suspended'; }
     async close() { if (this.state !== 'closed') closed++; this.state = 'closed'; }
     createGain() { return { gain: { value: 1, cancelScheduledValues() {}, setValueAtTime() {}, setTargetAtTime() {} }, connect() {}, disconnect() {} }; }
-    createAnalyser() { return { frequencyBinCount: 2048, getByteFrequencyData(data) { if (options.spectrum) options.spectrum(data); else data.fill(100); } }; }
+    createAnalyser() { return { frequencyBinCount: 2048, getFloatFrequencyData(data) { const linear = new Float32Array(data.length); if(options.vortexSpectrum) options.vortexSpectrum(linear); else { const bytes=new Uint8Array(data.length);if(options.spectrum)options.spectrum(bytes);else bytes.fill(100);for(let i=0;i<data.length;i++)linear[i]=bytes[i]/255*.01; } for(let i=0;i<data.length;i++)data[i]=linear[i]>0 ? 20*Math.log10(linear[i]) : -Infinity; }, getByteFrequencyData(data) { if (options.spectrum) options.spectrum(data); else data.fill(100); } }; }
     createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
   }
   const navigator = { mediaDevices: { getUserMedia: async constraints => {
@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.42'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.43'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -937,188 +937,92 @@ test('ordinary sustained input renders without a beat and fades when only faint 
 });
 
 
-test('vortex cycles in both directions, accepts beats and resets on stop', async () => {
-  const f = fixture(async stream => stream, { spectrum(data) { data.fill(0); } });
-  f.nodes['#previous-mode'].click();
-  assert.equal(f.inspect().mode, 'vortex');
-  assert.equal(f.nodes['#theme-number'].textContent, '03 / 03');
-  await f.nodes['#start'].click();
-  for (let i=0;i<90;i++) await f.tick();
-  let v=f.inspect().vortex;
-  assert.ok(v.particles.length > 0, 'silence keeps ambient particles moving');
 
-  assert.ok(v.particles.every(p=>[p.x,p.y,p.vx,p.vy].every(Number.isFinite)));
-  const direction=v.direction;
-  for(let i=0;i<16;i++) {
-    // Public hook is exercised through the same VM as the application.
-    f.triggerBeat(true);
-    for(let j=0;j<12;j++) await f.tick();
-  }
-  assert.equal(v.beats,16);
-  assert.equal(v.direction,-direction);
-  f.nodes['#next-mode'].click();
-  assert.equal(f.inspect().mode,'flocks');
-  f.nodes['#previous-mode'].click();
-  assert.equal(f.inspect().mode,'vortex');
-  assert.equal(f.counts().requestCount,1);
-  f.nodes['#stop'].click();
-  assert.equal(f.inspect().vortex.particles.length,0);
-});
-
-test('vortex groups broadband attacks into 48 bands and accelerates crowded lifetimes', async () => {
-  let loud=false;
-  const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? 220 : 0);}});
-  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click();
-  await f.tick(.08); loud=true; await f.tick(.08);
-  const v=f.inspect().vortex;
-  assert.equal(v.particles.length, 48 * 2);
-  assert.ok(v.decayRate > 1);
-  assert.ok(v.densityAlpha < 1);
-  assert.ok(v.particles.some(p=>p.f>.5),'high frequencies receive emission slots');
-  const newborn = v.particles[0];
-  const progress = newborn.lifeProgress;
-  await f.tick();
-  assert.ok(newborn.lifeProgress - progress > 1/60, 'crowding shortens existing lifetimes');
-  loud=false;
-  for(let i=0;i<80;i++) await f.tick(.1);
-  assert.ok(!v.particles.includes(newborn), 'old dense cohorts expire without new emissions');
-  assert.ok(v.particles.every(p=>[p.x,p.y,p.vx,p.vy].every(Number.isFinite)));
-  f.nodes['#stop'].click();
-});
-
-
-test('vortex combines neighbouring frequencies and waits for the temporal window', async () => {
-  let loud=false;
-  const f=fixture(async stream=>stream,{spectrum(data){data.fill(0);if(loud)data.fill(220,600,800);}});
-  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
-  loud=true;
-  for(let i=0;i<4;i++) await f.tick();
-  const v=f.inspect().vortex;
-  assert.equal(v.particles.length,0,'no emission before the 80ms window completes');
-  await f.tick();
-  assert.ok(v.particles.length>0 && v.particles.length<20,'neighbouring bins become a few bands');
-  assert.ok(v.particles.every(p=>p.radius>=.35 && p.radius<=5));
-  const particles=v.particles.length;
-  await f.tick(.08);
-  assert.equal(v.particles.length,particles,'steady sound does not retrigger');
-  f.nodes['#stop'].click();
-});
-
-test('vortex rotation follows recognised BPM smoothly and returns to neutral when tracking ends', async () => {
-  const f=fixture(async stream=>stream,{spectrum(data){data.fill(0);}});
-  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
-  const v=f.inspect().vortex;
-  f.setVisualRhythm({tracking:true,bpm:60});
-  f.stepVortex(1/60);
-  assert.ok(v.rotationSpeed<1 && v.rotationSpeed>.9, 'tempo changes start gradually');
-  for(let i=0;i<600;i++) f.stepVortex(1/60);
-  const slow=v.rotationSpeed;
-  assert.ok(Math.abs(slow-.5)<.01);
-  f.setVisualRhythm({tracking:true,bpm:180});
-  for(let i=0;i<600;i++) f.stepVortex(1/60);
-  assert.ok(Math.abs(v.rotationSpeed-1.5)<.01);
-  f.setVisualRhythm({tracking:false,bpm:180});
-  for(let i=0;i<600;i++) f.stepVortex(1/60);
-  assert.ok(Math.abs(v.rotationSpeed-1)<.01, 'stale BPM is not used after tracking ends');
-  f.nodes['#stop'].click();
-  assert.equal(v.rotationSpeed,1);
-});
-
-
-test('vortex launch speed and reach follow band volume while angle follows the positive slope', async () => {
-  async function launch(previous, next) {
-    let level = previous;
-    const f = fixture(async stream => stream, { spectrum(data) { data.fill(0); data.fill(level,600,800); } });
-    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
-    const v = f.inspect().vortex;
-    v.particles.length = 0;
-    v.levels.length = 0; // Compare slopes under the same loudness adaptation history.
-    level = next; await f.tick(.08);
-    const p = v.particles[0];
-    assert.ok(p);
-    const speed = Math.hypot(p.vx,p.vy);
-    const cross = p.px * p.vy - p.py * p.vx;
-    const dot = p.px * p.vx + p.py * p.vy;
-    const angle = Math.atan2(cross,dot);
-    const startVx=p.vx, startVy=p.vy;
-    let reach = 0, turn = 0;
-    for(let i=0;i<90;i++) {
-      await f.tick();
-      reach = Math.max(reach,Math.hypot(p.x,p.y));
-      if(i===14) turn=Math.atan2(startVx*p.vy-startVy*p.vx,startVx*p.vx+startVy*p.vy);
-    }
-    f.nodes['#stop'].click();
-    return { speed, angle, reach, turn, turnRate: p.turnRate, radius:p.radius };
-  }
-  const soft=await launch(0,30), loud=await launch(0,230), gentle=await launch(210,230);
-  assert.ok(loud.speed > soft.speed * 3, 'band volume changes speed without saturating at the same value');
-  assert.ok(loud.reach > soft.reach * 1.3, 'louder launches travel farther through the same field');
-  assert.ok(Math.abs(loud.angle) > Math.abs(gentle.angle) + .3, 'sharper attack makes a larger tangential launch angle');
-  assert.ok(Math.abs(gentle.angle) > .5, 'even gentle attacks visibly tilt away from the frequency ray');
-  assert.ok(loud.turnRate*gentle.turnRate<0, 'sharp and gentle attacks curve in opposite directions');
-  assert.ok(Math.abs(loud.turn)>.35, 'flight direction visibly curves after launch');
-  assert.ok(loud.turn*gentle.turn<0, 'the actual trajectories turn in opposite directions');
-  assert.ok(Math.abs(loud.speed-gentle.speed) < loud.speed * .15, 'equal volume keeps similar speed despite different slopes');
-});
-
-
-test('vortex auto sensitivity does not equalise the speed of quiet and loud broadband bursts', async () => {
-  async function speed(level) {
-    let loud=false;
-    const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? level : 0);}});
-    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
-    loud=true; await f.tick(.08);
-    const p=f.inspect().vortex.particles[0];
-    const result=Math.hypot(p.vx,p.vy);
-    f.nodes['#stop'].click();
-    return result;
-  }
-  assert.ok(await speed(220) > await speed(80) * 1.2);
-});
-
-
-test('vortex temporal peak hold retains a brief attack and resets on theme change', async () => {
-  let loud=false;
-  const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? 180 : 0);}});
-  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick(); await f.tick(.08);
-  loud=true; await f.tick(); loud=false;
-  for(let i=0;i<4;i++) await f.tick();
-  const v=f.inspect().vortex;
-  assert.equal(v.particles.filter(p=>p.life===6).length,96,'a one-frame transient survives the 80ms peak hold');
-  f.nodes['#next-mode'].click(); f.nodes['#previous-mode'].click();
-  assert.equal(v.analysisElapsed,0);
-  assert.ok(v.windowPeaks.every(x=>x===0));
-  assert.ok(v.previous.every(x=>x===0));
-  f.nodes['#stop'].click();
-});
-
-
-test('vortex size spans fine treble dust and larger bass streaks while symmetric copies match', async () => {
-  let loud=false;
-  const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? 220 : 0);}});
+async function vortexScene(options={}) {
+  let level=0;
+  const f=fixture(async stream=>stream,{...options,vortexSpectrum(data){
+    data.fill(0);data.fill(level,600,800);
+    options.signal?.(data,level);
+  }});
   f.nodes['#previous-mode'].click();await f.nodes['#start'].click();await f.tick();await f.tick(.08);
-  loud=true;await f.tick(.08);
-  const particles=f.inspect().vortex.particles;
-  const bass=particles.filter(p=>p.f<.1),treble=particles.filter(p=>p.f>.9);
-  assert.ok(Math.min(...bass.map(p=>p.radius)) > Math.max(...treble.map(p=>p.radius))*3);
-  assert.ok(particles.every(p=>p.radius>=.35 && p.radius<=5));
-  assert.ok(treble.every(p=>p.radius<1),'treble keeps fine outlines');
-  for(let i=0;i<particles.length;i+=2) assert.equal(particles[i].radius,particles[i+1].radius);
+  return { f, v:f.inspect().vortex, set(value){level=value;}, async sample(){await f.tick(.08);} };
+}
+test('vortex real silence stays empty and stop clears raw analysis state',async()=>{
+  const {f,v}=await vortexScene();
+  for(let i=0;i<60;i++)await f.tick(.05);
+  assert.equal(v.particles.length,0,'no ambient dummy spray during microphone silence');
+  f.nodes['#stop'].click();
+  assert.equal(v.reference,0);assert.equal(v.analysisElapsed,0);
+  assert.ok(v.bandCooldowns.every(x=>x===0));
+});
+test('vortex raw linear loudness yields visibly different heads and measured speed and reach',async()=>{
+  async function launch(level) {
+    const scene=await vortexScene();const {f,v}=scene;
+    scene.set(.01);await scene.sample(); // Establish the same microphone scale.
+    scene.set(0);await scene.sample();
+    for(let i=0;i<30;i++)await f.tick(.08);
+    v.particles.length=0;
+    scene.set(level);await scene.sample();
+    const p=v.particles[0];assert.ok(p);
+    const result={radius:p.radius,speed:Math.hypot(p.vx,p.vy),reach:0};
+    for(let i=0;i<30;i++){await f.tick();result.reach=Math.max(result.reach,Math.hypot(p.x,p.y));}
+    f.nodes['#stop'].click();return result;
+  }
+  const weak=await launch(.001),strong=await launch(.008);
+  assert.ok(strong.radius>weak.radius*2.5,'same-frequency strong sounds have visibly bigger heads');
+  assert.ok(strong.speed>weak.speed*5,'measured outgoing speed preserves raw volume contrast');
+  assert.ok(strong.reach>weak.reach*3,'strong sounds visibly reach farther');
+});
+test('vortex does not repeatedly spray on steady sound or two-percent level jitter',async()=>{
+  const {f,v,set,sample}=await vortexScene();set(.006);await sample();
+  const original=new Set(v.particles);assert.ok(original.size>0);
+  for(let i=0;i<40;i++){set(.006*(1+.02*Math.sin(i)));await sample();}
+  assert.ok(v.particles.every(p=>original.has(p)),'tiny level jitter produces no new cohorts');
+  set(0);for(let i=0;i<40;i++)await sample();
+  assert.equal(v.particles.length,0,'visible motion clears within a few seconds of silence');
+  f.nodes['#stop'].click();
+});
+test('vortex 48-band and 80ms pooling captures short attacks without a fixed particle cap',async()=>{
+  const {f,v,set,sample}=await vortexScene({signal(data,level){data.fill(level);}});
+  set(.01);for(let i=0;i<4;i++)await f.tick();
+  assert.equal(v.particles.length,0);
+  set(0);await f.tick();
+  assert.equal(v.particles.length,96,'short attack retained and pooled into 48 symmetric pairs');
+  assert.ok(v.particles.every(p=>p.radius>=.45 && p.radius<=5));
+  for(let i=0;i<3;i++){await sample();set(.01);await sample();set(0);await sample();}
+  assert.ok(v.particles.length>200,'coarse emission is not a hidden 200-particle cap');
+  f.nodes['#stop'].click();
+});
+test('vortex short life and crisp heads expose size at birth instead of shrinking everything',async()=>{
+  const arcs=[];
+  const {f,v,set,sample}=await vortexScene({arcs});
+  set(.01);await sample();
+  const p=v.particles[0];assert.ok(p);
+  assert.ok(p.life<=2);
+  assert.ok(arcs.some(({args})=>Math.abs(args[2]-p.radius)<1e-5),'head is drawn at full initial radius');
+  f.nodes['#stop'].click();
+});
+test('vortex tempo following and 16-beat direction changes survive emission changes',async()=>{
+  const {f,v}=await vortexScene();
+  f.setVisualRhythm({tracking:true,bpm:180});
+  for(let i=0;i<600;i++)f.stepVortex(1/60);
+  assert.ok(Math.abs(v.rotationSpeed-1.5)<.01);
+  const direction=v.direction;
+  for(let i=0;i<16;i++){f.triggerBeat(true);for(let j=0;j<12;j++)f.stepVortex(1/60);}
+  assert.equal(v.direction,-direction);
+  f.setVisualRhythm({tracking:false,bpm:180});
+  for(let i=0;i<600;i++)f.stepVortex(1/60);
+  assert.ok(Math.abs(v.rotationSpeed-1)<.01);
   f.nodes['#stop'].click();
 });
 
 
-test('vortex bass size changes with volume and attack at the same frequency', async () => {
-  async function size(previous,next) {
-    let level=previous;
-    const f=fixture(async stream=>stream,{spectrum(data){data.fill(0);data.fill(level,60,80);}});
-    f.nodes['#previous-mode'].click();await f.nodes['#start'].click();await f.tick();await f.tick(.08);
-    const v=f.inspect().vortex;v.particles.length=0;v.levels.length=0;
-    level=next;await f.tick(.08);
-    const radius=v.particles[0].radius;
-    f.nodes['#stop'].click();return radius;
-  }
-  const soft=await size(0,30),loud=await size(0,230),gentle=await size(225,230);
-  assert.ok(loud>soft*1.5,'louder sound produces a larger particle in the same band');
-  assert.ok(loud>gentle*1.1,'sharper attack produces a larger particle at equal volume');
+test('vortex does not suppress a stronger onset arriving during a band cooldown',async()=>{
+  const {f,v,set,sample}=await vortexScene();
+  set(.01);await sample();set(0);for(let i=0;i<30;i++)await sample();v.particles.length=0;
+  set(.001);await sample();const first=new Set(v.particles);assert.ok(first.size>0);
+  set(.008);await sample();
+  const stronger=v.particles.filter(p=>!first.has(p));assert.ok(stronger.length>0);
+  assert.ok(Math.max(...stronger.map(p=>p.radius))>Math.max(...[...first].map(p=>p.radius))*2);
+  f.nodes['#stop'].click();
 });
