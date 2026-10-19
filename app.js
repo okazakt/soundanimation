@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.41';
+  const VERSION = '2026.10.19.42';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1475,6 +1475,9 @@
     // Gentle and sharp attacks peel away on opposite sides of the radial ray.
     const bendDirection = vortex.direction * (attack < .35 ? -1 : 1);
     const turnRate = ambient ? 0 : bendDirection * (.9 + 3.1 * attack);
+    // Expand the size contrast without restoring the oversized glowing blobs.
+    const radius = ambient ? .35 : .35 + (.55 + 4.1 * Math.pow(1-f,1.7)) *
+      (.2 + .8 * Math.pow(volume,1.3)) * (.6 + .4 * attack);
     for (let c = 0; c < copies; c++) {
       const a = angle + c * Math.PI * 2 / copies;
       const heading = a + bendDirection * deflection;
@@ -1482,7 +1485,7 @@
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
         vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
-        radius: (1 + (1-f)**2 * 3) * (1 + volume * .25) * (ambient ? .25 : 1),
+        radius,
         mass: 1 + (1-f) * 1.8, turnRate, f, age: 0, lifeProgress: 0, life: ambient ? 5 : 6 });
     }
   }
@@ -1590,7 +1593,8 @@
       const alpha=clamp(d/25,0,1)*Math.min(1,(p.life-p.lifeProgress)/.8);
       const hue=(v.hue+p.f*120)%360;
       const light=50+25*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
-      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.28*v.densityAlpha})`; ctx.lineWidth=r*2;
+      const sizeAlpha = Math.sqrt(1/Math.max(1,r/1.4));
+      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.28*v.densityAlpha*sizeAlpha})`; ctx.lineWidth=r*2;
       ctx.beginPath(); ctx.moveTo(p.px,p.py); ctx.lineTo(p.x,p.y); ctx.stroke();
     }
     const radius=12+Math.min(.5,v.average)*12+v.pulse*8;

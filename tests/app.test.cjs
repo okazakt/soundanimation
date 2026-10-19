@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.41'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.42'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -997,7 +997,7 @@ test('vortex combines neighbouring frequencies and waits for the temporal window
   assert.equal(v.particles.length,0,'no emission before the 80ms window completes');
   await f.tick();
   assert.ok(v.particles.length>0 && v.particles.length<20,'neighbouring bins become a few bands');
-  assert.ok(v.particles.every(p=>p.radius>=1 && p.radius<=5));
+  assert.ok(v.particles.every(p=>p.radius>=.35 && p.radius<=5));
   const particles=v.particles.length;
   await f.tick(.08);
   assert.equal(v.particles.length,particles,'steady sound does not retrigger');
@@ -1048,7 +1048,7 @@ test('vortex launch speed and reach follow band volume while angle follows the p
       if(i===14) turn=Math.atan2(startVx*p.vy-startVy*p.vx,startVx*p.vx+startVy*p.vy);
     }
     f.nodes['#stop'].click();
-    return { speed, angle, reach, turn, turnRate: p.turnRate };
+    return { speed, angle, reach, turn, turnRate: p.turnRate, radius:p.radius };
   }
   const soft=await launch(0,30), loud=await launch(0,230), gentle=await launch(210,230);
   assert.ok(loud.speed > soft.speed * 3, 'band volume changes speed without saturating at the same value');
@@ -1090,4 +1090,35 @@ test('vortex temporal peak hold retains a brief attack and resets on theme chang
   assert.ok(v.windowPeaks.every(x=>x===0));
   assert.ok(v.previous.every(x=>x===0));
   f.nodes['#stop'].click();
+});
+
+
+test('vortex size spans fine treble dust and larger bass streaks while symmetric copies match', async () => {
+  let loud=false;
+  const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? 220 : 0);}});
+  f.nodes['#previous-mode'].click();await f.nodes['#start'].click();await f.tick();await f.tick(.08);
+  loud=true;await f.tick(.08);
+  const particles=f.inspect().vortex.particles;
+  const bass=particles.filter(p=>p.f<.1),treble=particles.filter(p=>p.f>.9);
+  assert.ok(Math.min(...bass.map(p=>p.radius)) > Math.max(...treble.map(p=>p.radius))*3);
+  assert.ok(particles.every(p=>p.radius>=.35 && p.radius<=5));
+  assert.ok(treble.every(p=>p.radius<1),'treble keeps fine outlines');
+  for(let i=0;i<particles.length;i+=2) assert.equal(particles[i].radius,particles[i+1].radius);
+  f.nodes['#stop'].click();
+});
+
+
+test('vortex bass size changes with volume and attack at the same frequency', async () => {
+  async function size(previous,next) {
+    let level=previous;
+    const f=fixture(async stream=>stream,{spectrum(data){data.fill(0);data.fill(level,60,80);}});
+    f.nodes['#previous-mode'].click();await f.nodes['#start'].click();await f.tick();await f.tick(.08);
+    const v=f.inspect().vortex;v.particles.length=0;v.levels.length=0;
+    level=next;await f.tick(.08);
+    const radius=v.particles[0].radius;
+    f.nodes['#stop'].click();return radius;
+  }
+  const soft=await size(0,30),loud=await size(0,230),gentle=await size(225,230);
+  assert.ok(loud>soft*1.5,'louder sound produces a larger particle in the same band');
+  assert.ok(loud>gentle*1.1,'sharper attack produces a larger particle at equal volume');
 });
