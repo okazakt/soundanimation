@@ -75,7 +75,7 @@
   // Raw RMS prevents automatic gain from making faint background noise visible.
   // Supported rhythm still allows quiet music to render as before.
   function soundVisible(r,level) {
-    return rhythmVisible(r) || !!(level && !level.quiet && level.rms>=.005);
+    return rhythmVisible(r) || !!(level && !level.quiet && level.rms>=.001);
   }
   const api={energy,styles,BreathingPulse,breathingScale,rhythmVisible,soundVisible};
   if(typeof module!=='undefined' && module.exports) module.exports=api;

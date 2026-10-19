@@ -82,7 +82,7 @@ test('pulse peaks stay aligned to corrected attack clock for minutes without acc
 
 test('audible non-rhythmic input renders while amplified faint noise and silence stay hidden',()=>{
  const r={tracking:false};
- assert.equal(Dance.soundVisible(r,{rms:.02,adjustedRms:.1,quiet:false}),true);
+ assert.equal(Dance.soundVisible(r,{rms:.0016,adjustedRms:.1,quiet:false}),true);
  assert.equal(Dance.soundVisible(r,{rms:.0001,adjustedRms:.1,quiet:false}),false);
  assert.equal(Dance.soundVisible(r,{rms:0,adjustedRms:0,quiet:true}),false);
  assert.equal(Dance.soundVisible(r,null),false);

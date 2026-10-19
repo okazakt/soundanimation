@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.18.33'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.1'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -926,7 +926,7 @@ test('amplified noise stays blank until supported rhythm, quiet spectra can rend
 test('ordinary sustained input renders without a beat and fades when only faint amplified input remains',()=>{
  const f=fixture(async s=>s),spectrum=new Float64Array(512).fill(.15);
  f.setVisualRhythm({tracking:false});
- f.setInputLevel({rms:.02,adjustedRms:.1,quiet:false});
+ f.setInputLevel({rms:.0016,adjustedRms:.1,quiet:false});
  for(let i=0;i<180;i++) f.stepMotion(spectrum,1/60);
  assert.ok(f.inspect().flocks.some(g=>g.particles.some(p=>p.alpha>.05)));
  f.drawRadiation();
