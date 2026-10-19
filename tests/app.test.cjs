@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.38'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.39'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -1028,4 +1028,50 @@ test('vortex rotation follows recognised BPM smoothly and returns to neutral whe
   assert.ok(Math.abs(v.rotationSpeed-1)<.01, 'stale BPM is not used after tracking ends');
   f.nodes['#stop'].click();
   assert.equal(v.rotationSpeed,1);
+});
+
+
+test('vortex launch speed and reach follow band volume while angle follows the positive slope', async () => {
+  async function launch(previous, next) {
+    let level = previous;
+    const f = fixture(async stream => stream, { spectrum(data) { data.fill(0); data[700] = level; } });
+    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick();
+    const v = f.inspect().vortex;
+    v.particles.length = 0;
+    level = next; await f.tick();
+    const p = v.particles[0];
+    assert.ok(p);
+    const speed = Math.hypot(p.vx,p.vy);
+    const cross = p.px * p.vy - p.py * p.vx;
+    const dot = p.px * p.vx + p.py * p.vy;
+    const angle = Math.atan2(cross,dot);
+    let reach = 0;
+    for(let i=0;i<90;i++) {
+      await f.tick();
+      reach = Math.max(reach,Math.hypot(p.x,p.y));
+    }
+    f.nodes['#stop'].click();
+    return { speed, angle, reach };
+  }
+  const soft=await launch(0,30), loud=await launch(0,230), gentle=await launch(210,230);
+  assert.ok(loud.speed > soft.speed * 1.5, 'band volume changes speed without saturating at the same value');
+  assert.ok(loud.reach > soft.reach * 1.3, 'louder launches travel farther through the same field');
+  assert.ok(Math.abs(loud.angle) > Math.abs(gentle.angle) + .2, 'sharper attack makes a larger tangential launch angle');
+  assert.ok(Math.abs(gentle.angle) > .1, 'gentle attacks still launch at an angle');
+  assert.ok(Math.abs(loud.speed-gentle.speed) < loud.speed * .02, 'equal volume keeps similar speed despite different slopes');
+});
+
+
+test('vortex auto sensitivity does not equalise the speed of quiet and loud broadband bursts', async () => {
+  async function speed(level) {
+    let loud=false;
+    const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? level : 0);}});
+    f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick();
+    loud=true; await f.tick();
+    const p=f.inspect().vortex.particles[0];
+    const result=Math.hypot(p.vx,p.vy);
+    f.nodes['#stop'].click();
+    return result;
+  }
+  assert.ok(await speed(220) > await speed(80) * 1.2);
 });

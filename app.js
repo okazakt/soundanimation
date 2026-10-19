@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.38';
+  const VERSION = '2026.10.19.39';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1470,12 +1470,15 @@
     const copies = ambient ? 1 : (Math.floor(vortex.beats / 16) % 2 ? 4 : 2);
     const angle = f * Math.PI * 2 + vortex.rotation + (Math.random() - .5) * .08;
     const scale = Math.min(width, height) / 700;
+    // The launch point follows the frequency ray; velocity tilts away from it.
+    const deflection = ambient ? .15 : .15 + 1.05 * attack;
     for (let c = 0; c < copies; c++) {
       const a = angle + c * Math.PI * 2 / copies;
-      const speed = (ambient ? 35 : (130 + volume * 220 + attack * 420) * 2.3) * scale;
+      const heading = a + vortex.direction * deflection;
+      const speed = (ambient ? 35 : 60 + 1900 * Math.pow(volume, 1.5)) * scale;
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
-        vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+        vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
         radius: (1 + (1-f)**2 * 3) * (1 + volume * .25) * (ambient ? .25 : 1),
         mass: 1 + (1-f) * 1.8, f, age: 0, lifeProgress: 0, life: ambient ? 5 : 6 });
     }
@@ -1512,7 +1515,14 @@
       const attack=Math.max(0,value-v.previous[i])*gain;
       v.previous[i]=value;
       if (attack > .065) {
-        emitVortex(i/Math.max(1,count-1),clamp(value*gain,0,1),Math.min(1,attack));
+        // Soft compression retains differences that a hard clamp erased.
+        // Partial gain compensation keeps overall loudness differences audible
+        // in the motion instead of normalising every broadband burst alike.
+        const energy = value * Math.sqrt(gain);
+        const volume = energy / (energy + .4);
+        // Express the positive slope per 60 Hz reference frame for stable angles.
+        const slope = attack / Math.max(.001, dt * 60);
+        emitVortex(i/Math.max(1,count-1),volume,slope/(slope+.25));
       }
     }
     v.idle += dt;
