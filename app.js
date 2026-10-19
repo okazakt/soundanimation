@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.49';
+  const VERSION = '2026.10.19.50';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1467,7 +1467,7 @@
     if (!running || document.hidden || mode !== 'vortex' || vortex.cooldown > 0) return;
     vortex.cooldown = .18; vortex.pulse = isDownbeat ? 1 : .75;
     if (++vortex.beats % 16 === 0) {
-      vortex.direction *= -1; vortex.targetHue += 97;
+      vortex.direction *= -1;
     }
   }
   window.triggerBeat = triggerVortexBeat;
@@ -1488,16 +1488,13 @@
     const sparkKick=1200*spark*Math.sqrt(speedVolume)*attack;
     const speed = (70+1900*speedVolume*speedVolume*(.08+.92*attack*attack)+sparkKick) *
       (1+2*f)*scale;
-    // Most heads stay near the smoothly evolving base palette. Direction adds
-    // a small tonal variation; only a rare accent uses a distant colour.
-    const accent=Math.random()<.05;
-    const hueOffset=accent ? (Math.random()<.5 ? -1 : 1)*(95+Math.random()*50) :
-      14*Math.sin(heading);
+    // Restrict all births to neighbouring shades of the time-evolving base.
+    const hueOffset=8*Math.sin(heading);
     const hue=((vortex.hue+hueOffset)%360+360)%360;
     vortex.particles.push({x:Math.cos(a)*13,y:Math.sin(a)*13,
       px:Math.cos(a)*13,py:Math.sin(a)*13,
       vx:Math.cos(heading)*speed,vy:Math.sin(heading)*speed,
-      radius,hue,accent,mass:1+Math.pow(radius/5,.7)*1.6,turnRate,f,age:0,
+      radius,hue,mass:1+Math.pow(radius/5,.7)*1.6,turnRate,f,age:0,
       maxDistance:13,returning:false,finishReason:null,life:30});
   }
   function updateVortexEmitter(dt) {
