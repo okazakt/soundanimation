@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.37';
+  const VERSION = '2026.10.19.38';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -1452,11 +1452,11 @@
   // Positions are relative to the core, so rotation and resize preserve the field.
   const vortex = { particles: [], previous: new Float32Array(1434), levels: [],
     average: 0, bass: .01, pulse: 0, beats: 0, direction: 1, hue: 210,
-    targetHue: 210, cooldown: 0, idle: 0, time: 0, fresh: true };
+    targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true };
   function resetVortex() {
     vortex.particles.length = 0; vortex.previous.fill(0); vortex.levels.length = 0;
     Object.assign(vortex, { average: 0, bass: .01, pulse: 0, beats: 0,
-      direction: 1, hue: 210, targetHue: 210, cooldown: 0, idle: 0, time: 0, fresh: true });
+      direction: 1, hue: 210, targetHue: 210, cooldown: 0, idle: 0, time: 0, rotation: 0, rotationSpeed: 1, decayRate: 1, densityAlpha: 1, fresh: true });
   }
   function triggerVortexBeat(isDownbeat = false) {
     if (!running || document.hidden || mode !== 'vortex' || vortex.cooldown > 0) return;
@@ -1468,22 +1468,26 @@
   window.triggerBeat = triggerVortexBeat;
   function emitVortex(f, volume, attack, ambient = false) {
     const copies = ambient ? 1 : (Math.floor(vortex.beats / 16) % 2 ? 4 : 2);
-    const angle = f * Math.PI * 2 + vortex.time * .12 + (Math.random() - .5) * .08;
+    const angle = f * Math.PI * 2 + vortex.rotation + (Math.random() - .5) * .08;
     const scale = Math.min(width, height) / 700;
-    for (let c = 0; c < copies && vortex.particles.length < 200; c++) {
+    for (let c = 0; c < copies; c++) {
       const a = angle + c * Math.PI * 2 / copies;
       const speed = (ambient ? 35 : (130 + volume * 220 + attack * 420) * 2.3) * scale;
       vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
         px: Math.cos(a) * 13, py: Math.sin(a) * 13,
         vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
         radius: (1 + (1-f)**2 * 3) * (1 + volume * .25) * (ambient ? .25 : 1),
-        mass: 1 + (1-f) * 1.8, f, age: 0, life: ambient ? 5 : 12 });
+        mass: 1 + (1-f) * 1.8, f, age: 0, lifeProgress: 0, life: ambient ? 5 : 6 });
     }
   }
   function updateVortex(dt) {
     const v = vortex; v.time += dt; v.cooldown = Math.max(0, v.cooldown-dt);
     v.pulse *= Math.exp(-dt * 5); v.hue += (v.targetHue-v.hue) * (1-Math.exp(-dt/2));
     v.targetHue += dt * 2;
+    const tempoSpeed = rhythm.tracking && Number.isFinite(rhythm.bpm) && rhythm.bpm > 0
+      ? clamp(rhythm.bpm / 120, .5, 2) : 1;
+    v.rotationSpeed += (tempoSpeed-v.rotationSpeed) * (1-Math.exp(-dt/2));
+    v.rotation += dt * .12 * v.rotationSpeed;
     const count = demo ? 358 : Math.min(v.previous.length, Math.floor(bins.length * .7));
     let sum = 0, bass = 0, bassCount = 0;
     for (let i=0; i<count; i++) {
@@ -1502,46 +1506,38 @@
     if (rhythm.beat && rhythm.tracking) triggerVortexBeat(rhythm.beatInBar === 0);
     else if (!rhythm.tracking && bass > Math.max(.035,v.bass*1.45)) triggerVortexBeat();
     v.bass += (bass-v.bass)*(1-Math.exp(-dt/1.5));
-    // Rotate the scan start so a dense attack cannot starve high frequencies.
-    const start = Math.floor(v.time*997)%Math.max(1,count);
-    const strongest = [];
-    for (let n=0;n<count;n++) {
-      const offset = n % 2 ? Math.ceil(count/2) + Math.floor(n/2) : Math.floor(n/2);
-      const i=(start+offset)%count;
+    // Every analysed bin with a positive attack can emit; there is no count cap.
+    for (let i=0; i<count; i++) {
       const value=demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
       const attack=Math.max(0,value-v.previous[i])*gain;
       v.previous[i]=value;
       if (attack > .065) {
-        const candidate = { i, value, attack };
-        let rank = 0;
-        while (rank < strongest.length && strongest[rank].attack >= attack) rank++;
-        if (rank < 5) {
-          strongest.splice(rank, 0, candidate);
-          if (strongest.length > 5) strongest.pop();
-        }
+        emitVortex(i/Math.max(1,count-1),clamp(value*gain,0,1),Math.min(1,attack));
       }
-    }
-    for (const { i, value, attack } of strongest) {
-      emitVortex(i/Math.max(1,count-1),clamp(value*gain,0,1),Math.min(1,attack));
     }
     v.idle += dt;
     if (mean < .015 && v.idle > .12) { emitVortex(Math.random(),.08,.02,true); v.idle=0; }
+    // Crowding accelerates lifetime consumption, including existing particles.
+    // This is a continuous density response, not a particle admission limit.
+    const density = v.particles.length / 1500;
+    v.decayRate = 1 + density * density;
+    v.densityAlpha = 1 / Math.sqrt(1 + density);
     // Small substeps keep the force field stable at low frame rates.
     const steps=Math.ceil(dt*120), step=dt/steps, scale=Math.min(width,height)/700;
     for (const p of v.particles) {
-      p.px=p.x; p.py=p.y; p.age+=dt;
+      p.px=p.x; p.py=p.y; p.age+=dt; p.lifeProgress+=dt*v.decayRate;
       for(let j=0;j<steps;j++) {
         const d=Math.max(1,Math.hypot(p.x,p.y)), nx=-p.x/d, ny=-p.y/d;
         const gravity=(180/p.mass)*(1-v.pulse*1.8)*scale;
         // Tangential force tapers near the core to allow eventual absorption.
-        const swirl=65*v.direction*(1+v.pulse*3)*Math.min(1,d/100)*scale;
+        const swirl=65*v.rotationSpeed*v.direction*(1+v.pulse*3)*Math.min(1,d/100)*scale;
         const drag=Math.pow(.97,step*60);
         p.vx=(p.vx+(nx*gravity-ny*swirl)*step)*drag;
         p.vy=(p.vy+(ny*gravity+nx*swirl)*step)*drag;
         p.x+=p.vx*step; p.y+=p.vy*step;
       }
     }
-    v.particles=v.particles.filter(p=>p.age<p.life && !(p.age>.65 && Math.hypot(p.x,p.y)<12));
+    v.particles=v.particles.filter(p=>p.lifeProgress<p.life && !(p.age>.65 && Math.hypot(p.x,p.y)<12));
   }
   function drawVortex() {
     const v=vortex;
@@ -1555,10 +1551,10 @@
     for(const p of v.particles) {
       const d=Math.hypot(p.x,p.y), speed=Math.hypot(p.vx,p.vy);
       const r=Math.max(.25,p.radius*clamp(d/100,.08,1));
-      const alpha=clamp(d/25,0,1)*Math.min(1,(p.life-p.age)/.8);
+      const alpha=clamp(d/25,0,1)*Math.min(1,(p.life-p.lifeProgress)/.8);
       const hue=(v.hue+p.f*120)%360;
       const light=50+25*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
-      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.28})`; ctx.lineWidth=r*2;
+      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.28*v.densityAlpha})`; ctx.lineWidth=r*2;
       ctx.beginPath(); ctx.moveTo(p.px,p.py); ctx.lineTo(p.x,p.y); ctx.stroke();
     }
     const radius=12+Math.min(.5,v.average)*12+v.pulse*8;

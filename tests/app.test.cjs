@@ -53,8 +53,8 @@ function fixture(getMicrophone, options = {}) {
   const sandbox = { performance: { now: () => now }, Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
-  vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ vortex, flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawRadiation = () => drawBeatRadiation();\n  window.drawFlocks = () => drawFlocks();\n  window.setInputLevel = value => { latestInputLevel=value; };\n  window.setVisualRhythm = value => { beatThisClient={stopped:false,stop(){}};rhythm={...basicRhythm,...value}; };\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
-  return { triggerBeat: value => window.triggerBeat(value), nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
+  vm.runInNewContext(code.replace('  resize();\n  if', '  window.stepVortex = dt => updateVortex(dt);\n  window.inspect = () => ({ vortex, flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawRadiation = () => drawBeatRadiation();\n  window.drawFlocks = () => drawFlocks();\n  window.setInputLevel = value => { latestInputLevel=value; };\n  window.setVisualRhythm = value => { beatThisClient={stopped:false,stop(){}};rhythm={...basicRhythm,...value}; };\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
+  return { stepVortex: dt => window.stepVortex(dt), triggerBeat: value => window.triggerBeat(value), nodes, events, document, frames, counts: () => ({ stopped, closed, released, requestCount }),
     image: () => image, inspect: () => window.inspect(), stepRhythm: (values, dt) => window.stepRhythm(values, dt),
     drawRadiation: () => window.drawRadiation(),
     drawFlocks: () => window.drawFlocks(),
@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.37'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.38'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));
@@ -937,7 +937,7 @@ test('ordinary sustained input renders without a beat and fades when only faint 
 });
 
 
-test('vortex cycles in both directions, bounds particles, accepts beats and resets on stop', async () => {
+test('vortex cycles in both directions, accepts beats and resets on stop', async () => {
   const f = fixture(async stream => stream, { spectrum(data) { data.fill(0); } });
   f.nodes['#previous-mode'].click();
   assert.equal(f.inspect().mode, 'vortex');
@@ -946,7 +946,7 @@ test('vortex cycles in both directions, bounds particles, accepts beats and rese
   for (let i=0;i<90;i++) await f.tick();
   let v=f.inspect().vortex;
   assert.ok(v.particles.length > 0, 'silence keeps ambient particles moving');
-  assert.ok(v.particles.length <= 200);
+
   assert.ok(v.particles.every(p=>[p.x,p.y,p.vx,p.vy].every(Number.isFinite)));
   const direction=v.direction;
   for(let i=0;i<16;i++) {
@@ -965,32 +965,39 @@ test('vortex cycles in both directions, bounds particles, accepts beats and rese
   assert.equal(f.inspect().vortex.particles.length,0);
 });
 
-test('vortex responds to spectral attacks within a fixed particle budget', async () => {
+test('vortex emits all attacking bins above the former cap and accelerates crowded lifetimes', async () => {
   let loud=false;
   const f=fixture(async stream=>stream,{spectrum(data){data.fill(loud ? 220 : 0);}});
   f.nodes['#previous-mode'].click(); await f.nodes['#start'].click();
   await f.tick(); loud=true; await f.tick();
   const v=f.inspect().vortex;
-  assert.ok(v.particles.length>0);
+  assert.equal(v.particles.length, 1433 * 2);
+  assert.ok(v.decayRate > 1);
+  assert.ok(v.densityAlpha < 1);
   assert.ok(v.particles.some(p=>p.f>.5),'high frequencies receive emission slots');
-  for(let i=0;i<150;i++) { loud=!loud; await f.tick(.1); }
-  assert.ok(v.particles.length<=200);
+  const newborn = v.particles[0];
+  const progress = newborn.lifeProgress;
+  await f.tick();
+  assert.ok(newborn.lifeProgress - progress > 1/60, 'crowding shortens existing lifetimes');
+  loud=false;
+  for(let i=0;i<80;i++) await f.tick(.1);
+  assert.ok(!v.particles.includes(newborn), 'old dense cohorts expire without new emissions');
   assert.ok(v.particles.every(p=>[p.x,p.y,p.vx,p.vy].every(Number.isFinite)));
   f.nodes['#stop'].click();
 });
 
 
-test('vortex selects only the five strongest attacks and launches small fast streaks', async () => {
+test('vortex keeps all sparse attacks and launches small fast streaks', async () => {
   let loud = false;
-  const peaks = [40, 300, 620, 950, 1300];
+  const peaks = [40, 150, 300, 480, 620, 800, 950, 1100, 1300];
   const f = fixture(async stream => stream, { spectrum(data) {
-    data.fill(loud ? 30 : 0);
-    if(loud) peaks.forEach((bin, rank) => { data[bin] = 210 + rank * 10; });
+    data.fill(0);
+    if(loud) peaks.forEach((bin, rank) => { data[bin] = 170 + rank * 10; });
   } });
   f.nodes['#previous-mode'].click(); await f.nodes['#start'].click();
   await f.tick(); loud = true; await f.tick();
   const particles = f.inspect().vortex.particles;
-  assert.equal(particles.length, 10, 'five bands with two symmetric copies each');
+  assert.equal(particles.length, peaks.length * 2, 'all nine bands emit symmetric copies');
   const bands = [...new Set(particles.map(p => Math.round(p.f * 1432)))].sort((a,b)=>a-b);
   assert.deepEqual(bands, peaks);
   assert.ok(particles.every(p => p.radius >= 1 && p.radius <= 5));
@@ -1000,4 +1007,25 @@ test('vortex selects only the five strongest attacks and launches small fast str
   await f.tick();
   assert.equal(f.inspect().vortex.particles.length, before, 'sustained spectrum does not emit again');
   f.nodes['#stop'].click();
+});
+
+
+test('vortex rotation follows recognised BPM smoothly and returns to neutral when tracking ends', async () => {
+  const f=fixture(async stream=>stream,{spectrum(data){data.fill(0);}});
+  f.nodes['#previous-mode'].click(); await f.nodes['#start'].click(); await f.tick();
+  const v=f.inspect().vortex;
+  f.setVisualRhythm({tracking:true,bpm:60});
+  f.stepVortex(1/60);
+  assert.ok(v.rotationSpeed<1 && v.rotationSpeed>.9, 'tempo changes start gradually');
+  for(let i=0;i<600;i++) f.stepVortex(1/60);
+  const slow=v.rotationSpeed;
+  assert.ok(Math.abs(slow-.5)<.01);
+  f.setVisualRhythm({tracking:true,bpm:180});
+  for(let i=0;i<600;i++) f.stepVortex(1/60);
+  assert.ok(Math.abs(v.rotationSpeed-1.5)<.01);
+  f.setVisualRhythm({tracking:false,bpm:180});
+  for(let i=0;i<600;i++) f.stepVortex(1/60);
+  assert.ok(Math.abs(v.rotationSpeed-1)<.01, 'stale BPM is not used after tracking ends');
+  f.nodes['#stop'].click();
+  assert.equal(v.rotationSpeed,1);
 });
