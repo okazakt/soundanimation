@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 function clientFixture(autoReady = true, options = {}) {
-  const workers = [], nodes = [], states = [], statuses = [], storage = [];
+  const workers = [], nodes = [], states = [], statuses = [], storage = [], attacks = [];
   let clock = 0;
   class Worker {
     constructor() { this.messages = []; workers.push(this); }
@@ -26,8 +26,8 @@ function clientFixture(autoReady = true, options = {}) {
     window, Worker, AudioWorkletNode, document: { baseURI: 'https://example.test/soundanimation/' }, URL,
     setTimeout, clearTimeout, performance: { now: () => clock++ }, ...options
   });
-  const client = new window.BeatThisClient(state => states.push(state), status => statuses.push(status), value => storage.push(value));
-  return { client, context, source, workers, nodes, states, statuses, storage,
+  const client = new window.BeatThisClient(state => states.push(state), status => statuses.push(status), value => storage.push(value), () => {}, time => attacks.push(time));
+  return { client, context, source, workers, nodes, states, statuses, storage, attacks,
     capture(data = { pcm: new Float32Array(2048), firstFrame: 0 }) { nodes[0].port.onmessage({ data }); } };
 }
 test('Beat This cancellation during large-model load cannot start capture later', async () => {
@@ -105,4 +105,14 @@ test('stop cancels even an unresolved online service-worker registration before 
   const f = clientFixture(true, { navigator: { serviceWorker } });
   const pending = f.client.start(f.context, f.source); f.client.stop(); await pending;
   assert.equal(f.workers.length, 0);
+});
+test('attack correction uses source timestamps and rejects stale delivery backlogs', async () => {
+  const f = clientFixture(); await f.client.start(f.context, f.source);
+  f.context.currentTime = 20;
+  f.capture({ pcm: new Float32Array(2048), audioTime: 19.9, attacks: [18, 19.6, 19.95, 21, NaN] });
+  assert.deepEqual(f.attacks, [19.6, 19.95]);
+  const deliver = f.nodes[0].port.onmessage;
+  f.client.stop();
+  deliver({ data: { pcm: new Float32Array(2048), attacks: [20] } });
+  assert.deepEqual(f.attacks, [19.6, 19.95]);
 });

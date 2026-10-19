@@ -3,6 +3,29 @@
 (function(root) {
   const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
   const mod=(x,n)=>(x%n+n)%n;
+  class RenderTiming {
+    constructor() { this.reset(); }
+    reset() { this.cost=0; this.start=0; this.previous=0; this.intervals=[]; }
+    begin(timestamp, now) {
+      const interval=timestamp-this.previous;
+      if(this.previous && interval>0 && interval<100) {
+        this.intervals.push(interval); if(this.intervals.length>60) this.intervals.shift();
+      }
+      this.previous=timestamp; this.start=now;
+    }
+    lead(now) {
+      // Short intervals estimate refresh cadence; slow frames must not count
+      // both as CPU cost and as a slower display. Presentation itself is an
+      // estimate: Canvas exposes no actual scanout timestamp.
+      const refresh=this.intervals.length?Math.min(...this.intervals):1000/60;
+      const remaining=Math.max(0,this.cost-Math.max(0,now-this.start));
+      return clamp((remaining+Math.min(refresh,1000/30)/2)/1000,0,.1);
+    }
+    end(now) {
+      const cost=clamp(now-this.start,0,200);
+      this.cost=cost>this.cost?cost:this.cost*.9+cost*.1;
+    }
+  }
   class BeatClock {
     constructor() { this.reset(); }
     reset() {
@@ -94,7 +117,7 @@
       }
       return true;
     }
-    project(now,quietFor=0) {
+    project(now,quietFor=0,renderLead=0) {
       if(!this.seeded || !Number.isFinite(now)) return null;
       if(Number.isFinite(this.dropAt) && now-this.dropAt>Math.max(1,this.period*3.5) && this.dropAttacks<3) {
         this.requireAfter=Math.max(this.requireAfter,this.dropAt);this.suspended=true;this.waitingResume=false;return null;
@@ -110,7 +133,9 @@
       const modelAge=now-this.lastModelSupport,attackAge=now-this.lastAttack;
       const attackSupported=this.attackCount>=3 && attackAge<=Math.max(1,this.period*2.5);
       if(modelAge>24 || (modelAge>12 && !attackSupported)) return null;
-      const position=(now-this.anchor)/this.period,whole=Math.floor(position),phase=position-whole;
+      // Only visual phase looks ahead. Silence, expiry and supporting evidence
+      // must still be evaluated at the real audio time above.
+      const position=(now+clamp(Number.isFinite(renderLead)?renderLead:0,0,.1)-this.anchor)/this.period,whole=Math.floor(position),phase=position-whole;
       return {bpm:60/this.period,period:this.period,phase,
         lastBeatAudioTime:this.anchor+whole*this.period,beatCount:this.baseCount+whole,
         meter:this.meter,meterConfidence:this.meterConfidence,
@@ -119,6 +144,6 @@
         modelAge,attackAge,assisted:attackSupported && modelAge>4};
     }
   }
-  if(typeof module!=='undefined' && module.exports) module.exports={BeatClock};
-  else root.BeatClock=BeatClock;
+  if(typeof module!=='undefined' && module.exports) module.exports={BeatClock,RenderTiming};
+  else { root.BeatClock=BeatClock; root.RenderTiming=RenderTiming; }
 })(typeof self==='undefined'?globalThis:self);

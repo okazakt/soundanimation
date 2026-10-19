@@ -69,3 +69,22 @@ test('a fresh neural estimate after a fully expired clock reseeds instead of rev
   const c=new BeatClock();c.observeModel(state(1),1);assert.equal(c.project(30),null);
   c.observeModel(state(32,{bpm:90}),32);assert.equal(c.project(32).bpm,90);
 });
+test('render lookahead crosses a beat without advancing evidence expiry or changing the clock',()=>{
+  const c=new BeatClock();c.observeModel(state(16,{lastBeatAudioTime:15.5}),16);
+  const p=c.project(16.49,0,.03);
+  assert.ok(Math.abs(p.phase-.04)<1e-9);assert.equal(p.lastBeatAudioTime,16.5);
+  assert.equal(p.modelAge,16.49-15.5);
+  assert.ok(c.project(16.49).phase>.97);
+  assert.equal(c.project(28,0,.1),null);
+  assert.equal(c.project(17,1,.1),null);
+});
+test('render timing compensates remaining work, caps stalls and resets after resume',()=>{
+  const {RenderTiming}=require('../beat-clock.js');const t=new RenderTiming();
+  t.begin(100,100);t.end(140);
+  t.begin(150,150);
+  const lead=t.lead(160);
+  assert.ok(lead>=.03 && lead<=.05);
+  assert.ok(t.lead(180)<lead);
+  t.end(500);t.begin(510,510);assert.equal(t.lead(510),.1);
+  t.reset();t.begin(1000,1000);assert.ok(t.lead(1000)<.01);
+});

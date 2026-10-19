@@ -42,7 +42,7 @@ function fixture(getMicrophone, options = {}) {
     assert.equal(constraints.audio.noiseSuppression, false);
     return getMicrophone(stream, constraints);
   }, enumerateDevices: options.enumerateDevices, addEventListener(type, fn) { events['media:' + type] = fn; } }, wakeLock: { request: async () => ({ addEventListener() {}, async release() { released++; } }) } };
-  const window = { DanceMotion: require('../dance-motion.js'), BeatClock: require('../beat-clock.js').BeatClock, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: options.dpr || 2, addEventListener(type, fn) { events[type] = fn; } };
+  const window = { DanceMotion: require('../dance-motion.js'), BeatClock: require('../beat-clock.js').BeatClock, RenderTiming: require('../beat-clock.js').RenderTiming, BeatThisClient: options.beatThisClient, ModelSetup: options.modelSetup, AudioContext: Audio, devicePixelRatio: options.dpr || 2, addEventListener(type, fn) { events[type] = fn; } };
   // Reproducible visual variation keeps coverage independent of session RNG.
   let randomState = options.randomSeed ?? 0x12345678;
   const deterministicMath = Object.create(Math);
@@ -50,7 +50,7 @@ function fixture(getMicrophone, options = {}) {
     randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
     return randomState / 0x100000000;
   };
-  const sandbox = { Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
+  const sandbox = { performance: { now: () => now }, Math: deterministicMath, window, document, navigator, ResizeObserver: class { observe() {} },
     requestAnimationFrame(fn) { const id = ++nextFrame; frames.set(id, fn); return id; },
     cancelAnimationFrame(id) { frames.delete(id); }, setTimeout() { return 1; }, clearTimeout() {} };
   vm.runInNewContext(code.replace('  resize();\n  if', '  window.inspect = () => ({ flocks, backgroundTone, backgroundEnergy, beatCooldown, mode, rhythm, basicRhythm, beatThisState, aiActive, audio, mood, focus, soundProfile });\n  window.splitParticle = (f, p) => splitParticle(f, p);\n  window.mergeParticles = (p, q) => mergeParticles(p, q);\n  window.stepSoundProfile = (values, dt) => { rawEnergies.set(values); updateSoundProfile(dt); };\n  window.particleSpeedLimit = () => particleSpeedLimit();\n  window.stepFocus = (dt, audible) => { elapsed += dt; updateFocus(dt, audible); };\n  window.stepColourBreath = (dt, audible) => { mood.time += dt; updateColourBreath(dt, audible); };\n  window.stepMood = (values, dt) => { rawEnergies.set(values); updateMood(dt); };\n  window.particleColour = (p, f) => particleColour(p, f);\n  window.chooseFlockGate = (f, wanted, audible, safety, now) => chooseFlockGate(f, wanted, audible, safety, now);\n  window.stepScene = (values, raw, dt) => { energies.set(values); rawEnergies.set(raw); elapsed += dt; updateRhythm(dt); updateFlocks(dt); };\n  window.recordParticleTail = (p, time) => recordParticleTail(p, time);\n  window.drawParticleTail = (p, now) => drawParticleTail(p, p.x, p.y, 1, 1, 120, 1, 4, now);\n  window.finishTransfers = moves => finishTransfers(moves);\n  window.drawRadiation = () => drawBeatRadiation();\n  window.drawFlocks = () => drawFlocks();\n  window.setInputLevel = value => { latestInputLevel=value; };\n  window.setVisualRhythm = value => { beatThisClient={stopped:false,stop(){}};rhythm={...basicRhythm,...value}; };\n  window.stepMotion = (values, dt) => { energies.set(values);rawEnergies.set(values);elapsed+=dt;updateFlocks(dt); };\n  window.stepBeatExpression = (flock, dt) => updateBeatExpression(flock, dt);\n  window.stepRhythm = (values, dt) => { energies.set(values); updateRhythm(dt); };\n  resize();\n  if'), sandbox);
@@ -184,7 +184,7 @@ test('stop during permission prompt disposes the late stream without restarting'
 test('service worker ignores outside requests and deletes only its own outdated cache', async () => {
   const events = {}, deleted = [], cached = [];
   const self = { skipWaiting: async () => {}, clients: { claim: async () => {} }, location: { href: 'https://example.com/soundanimation/sw.js' }, addEventListener(type, fn) { events[type] = fn; } };
-  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.1'],
+  const caches = { keys: async () => ['sensor-cache', 'starlight-bell-soundanimation-v0', 'starlight-bell-soundanimation-v2026.10.19.35'],
     delete: async key => deleted.push(key), open: async () => ({ addAll: async urls => cached.push(...urls) }) };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'sw.js'), 'utf8'), { self, caches, URL });
   await new Promise(resolve => events.activate({ waitUntil: p => p.then(resolve) }));

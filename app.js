@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.1';
+  const VERSION = '2026.10.19.35';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -21,6 +21,7 @@
   let latestInputLevel = null;
   let aiActive = false, aiLastTick = -100, aiMotionScale = 1, aiMotionLimit = 1;
   const beatClock = new window.BeatClock();
+  const renderTiming = new window.RenderTiming();
   const aiLabel = () => 'Beat This!';
   function resetBeatThis() {
     beatThisClient?.stop(); beatThisClient = null; beatThisState = null; latestInputLevel = null;
@@ -48,6 +49,8 @@
         if(level.gain<param.value) param.setValueAtTime(level.gain,audio.currentTime);
         else param.setTargetAtTime(level.gain,audio.currentTime,.1);
       }
+    }, time => {
+      if (token === generation && client === beatThisClient) beatClock.attack(time);
     });
     beatThisClient = client;
     client.start(audio, source).catch(error => {
@@ -57,11 +60,7 @@
   }
   function selectRhythmEngine(dt) {
     const state=beatThisState,now=audio?.currentTime;
-    if(basicRhythm.onset && Number.isFinite(now)) {
-      // Analyser output describes the centre of its recent FFT window.
-      beatClock.attack(now-(analyser?.fftSize || 4096)/(2*(audio?.sampleRate || 48000)));
-    }
-    const clock=beatThisClient && !beatThisClient.stopped && beatClock.project(now,basicRhythm.quiet);
+    const clock=beatThisClient && !beatThisClient.stopped && beatClock.project(now,basicRhythm.quiet,renderTiming.lead(performance.now()));
     aiActive=!!clock;
     if(!clock) {rhythm=basicRhythm;return;}
     const {period,phase,meter,beatInBar}=clock;
@@ -1449,8 +1448,11 @@
 
   function frame(now) {
     if (!running || document.hidden) return;
+    if (!previous) renderTiming.reset();
+    renderTiming.begin(now, performance.now());
     const dt = previous ? Math.min(.1, (now - previous) / 1000) : 1 / 60;
     previous = now; elapsed += dt; update(dt); draw();
+    renderTiming.end(performance.now());
     frameId = requestAnimationFrame(frame);
   }
   function switchLane(direction) {

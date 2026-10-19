@@ -26,3 +26,21 @@ test('missing input discards a partial pre-gap block instead of mixing it into n
   for (let i = 0; i < 16; i++) f.step(.2);
   assert.equal(f.messages[1].discontinuity, false);
 });
+test('attacks retain audio timestamps when delivery/rendering is delayed', () => {
+  const f = fixture();
+  // Two seconds of short pulses; no UI or message consumer runs in between.
+  for (let i = 0; i < 800; i++) f.step(i % 187 < 8 ? .1 : 0);
+  const attacks = f.messages.flatMap(m => m.attacks);
+  assert.equal(attacks.length, 5);
+  for (let i = 0; i < attacks.length; i++) {
+    assert.ok(Math.abs(attacks[i] - (10 + i * 187 * 128 / 48000)) < .011);
+  }
+});
+test('steady input does not repeatedly create attacks and gaps discard partial detection windows', () => {
+  const f = fixture();
+  for (let i = 0; i < 375; i++) f.step(.02);
+  assert.equal(f.messages.flatMap(m => m.attacks).length, 1);
+  f.step(null);
+  for (let i = 0; i < 16; i++) f.step(0);
+  assert.equal(f.messages.at(-1).attacks.length, 0);
+});
