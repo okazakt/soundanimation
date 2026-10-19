@@ -1,8 +1,8 @@
 // MIT-licensed Beat This! browser port. See vendor/beat-this/NOTICE.md.
 import { createBeatThis } from './vendor/beat-this/beat-this-cpu.mjs';
-import './beat-this-audio.js?v=2026.10.19.35';
-import './beat-this-rhythm.js?v=2026.10.19.35';
-import './model-assets.js?v=2026.10.19.35';
+import './beat-this-audio.js?v=2026.10.19.36';
+import './beat-this-rhythm.js?v=2026.10.19.36';
+import './model-assets.js?v=2026.10.19.36';
 const RATE = 22050, CAPACITY = RATE * 16;
 let tracker, resampler, ring = new Float32Array(CAPACITY), written = 0, total = 0;
 let inputRate = RATE, inputSamples = 0, expectedInputTime = null, timeline = 0, resyncCount = 0;

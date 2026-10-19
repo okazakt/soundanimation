@@ -1,7 +1,7 @@
 'use strict';
 // All cache operations and requests stay within this application's directory.
 const PREFIX = 'starlight-bell-soundanimation-';
-const CACHE = PREFIX + 'v2026.10.19.35';
+const CACHE = PREFIX + 'v2026.10.19.36';
 const BASE = new URL('./', self.location.href);
 // Immutable AI assets live independently of shell versions. Bump this key if
 // the model, bundled port or ORT files change; app updates must keep this cache.
@@ -12,12 +12,12 @@ const MODEL_ASSETS = [
   './vendor/beat-this/ort-wasm-simd-threaded.wasm'
 ].map(path => new URL(path, BASE).href);
 const ASSETS = [
-  './', './index.html', './style.css?v=2026.10.19.35', './app.js?v=2026.10.19.35',
-  './beat-this-audio.js?v=2026.10.19.35', './beat-this-capture.js?v=2026.10.19.35',
-  './dance-motion.js?v=2026.10.19.35',
-  './beat-clock.js?v=2026.10.19.35',
-  './beat-this-client.js?v=2026.10.19.35', './beat-this-worker.js?v=2026.10.19.35', './beat-this-rhythm.js?v=2026.10.19.35',
-  './model-setup.js?v=2026.10.19.35', './model-setup-worker.js?v=2026.10.19.35', './model-assets.js?v=2026.10.19.35',
+  './', './index.html', './style.css?v=2026.10.19.36', './app.js?v=2026.10.19.36',
+  './beat-this-audio.js?v=2026.10.19.36', './beat-this-capture.js?v=2026.10.19.36',
+  './dance-motion.js?v=2026.10.19.36',
+  './beat-clock.js?v=2026.10.19.36',
+  './beat-this-client.js?v=2026.10.19.36', './beat-this-worker.js?v=2026.10.19.36', './beat-this-rhythm.js?v=2026.10.19.36',
+  './model-setup.js?v=2026.10.19.36', './model-setup-worker.js?v=2026.10.19.36', './model-assets.js?v=2026.10.19.36',
   './licenses.html', './manifest.json', './icons/192x192.png', './icons/512x512.png'
 ].map(path => new URL(path, BASE).href);
 self.addEventListener('install', event => {

@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const VERSION = '2026.10.19.35';
+  const VERSION = '2026.10.19.36';
   document.querySelector('#version').textContent = `v${VERSION}`;
   // Spectral channels are shared by pixels; this is not a star count.
   const N = 512;
@@ -260,7 +260,7 @@
   const historyTimes = new Float64Array(HISTORY_SIZE);
   let historyCount = 0, signalTime = 0;
   function resetSignals() {
-    prepareFlocks(); resetRhythm(); resetMood(); resetSoundProfile(); resetBeatThis();
+    resetVortex(); prepareFlocks(); resetRhythm(); resetMood(); resetSoundProfile(); resetBeatThis();
     rawEnergies.fill(0); energies.fill(0);
     signals.fill(0); historyCount = 0; signalTime = 0;
     meteors = []; meteorCooldown = 0; flowAngle = Math.PI / 3;
@@ -304,6 +304,7 @@
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     prepareField();
+    vortex.fresh = true;
     draw();
   }
   function message(text, duration = 3000) {
@@ -456,6 +457,7 @@
     });
     recordSignals(dt);
     rhythm = basicRhythm; updateRhythm(dt); selectRhythmEngine(dt); updateMood(dt); updateDebug();
+    if (mode === 'vortex') { updateVortex(dt); vortex.renderDt = dt * 60; return; }
     if (mode === 'flocks') {
       updateFlocks(dt);
       environment = clamp(lerp(current, environment, Math.pow(current <= environment ? .992 : .88, frames)), .018, .5);
@@ -567,6 +569,7 @@
     return Math.pow(response, light.responseCurve);
   }
   function draw() {
+    if (mode === 'vortex') { drawVortex(); return; }
     if (mode === 'flocks') { drawFlocks(); return; }
     const k = (1 - Math.cos(2 * Math.PI * (elapsed % 60) / 60)) / 2;
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
@@ -1446,6 +1449,118 @@
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   }
 
+  // Positions are relative to the core, so rotation and resize preserve the field.
+  const vortex = { particles: [], previous: new Float32Array(1434), levels: [],
+    average: 0, bass: .01, pulse: 0, beats: 0, direction: 1, hue: 210,
+    targetHue: 210, cooldown: 0, idle: 0, time: 0, fresh: true };
+  function resetVortex() {
+    vortex.particles.length = 0; vortex.previous.fill(0); vortex.levels.length = 0;
+    Object.assign(vortex, { average: 0, bass: .01, pulse: 0, beats: 0,
+      direction: 1, hue: 210, targetHue: 210, cooldown: 0, idle: 0, time: 0, fresh: true });
+  }
+  function triggerVortexBeat(isDownbeat = false) {
+    if (!running || document.hidden || mode !== 'vortex' || vortex.cooldown > 0) return;
+    vortex.cooldown = .18; vortex.pulse = isDownbeat ? 1 : .75;
+    if (++vortex.beats % 16 === 0) {
+      vortex.direction *= -1; vortex.targetHue += 97;
+    }
+  }
+  window.triggerBeat = triggerVortexBeat;
+  function emitVortex(f, volume, attack, ambient = false) {
+    const copies = ambient ? 1 : (Math.floor(vortex.beats / 16) % 2 ? 4 : 2);
+    const angle = f * Math.PI * 2 + vortex.time * .12 + (Math.random() - .5) * .08;
+    const scale = Math.min(width, height) / 700;
+    for (let c = 0; c < copies && vortex.particles.length < 1200; c++) {
+      const a = angle + c * Math.PI * 2 / copies;
+      const speed = (ambient ? 35 : 130 + volume * 220 + attack * 420) * scale;
+      vortex.particles.push({ x: Math.cos(a) * 13, y: Math.sin(a) * 13,
+        px: Math.cos(a) * 13, py: Math.sin(a) * 13,
+        vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+        radius: (1 + (1-f)**2 * 17) * (1 + volume * .5) * Math.max(.5, scale) * (ambient ? .25 : 1),
+        mass: 1 + (1-f) * 1.8, f, age: 0, life: ambient ? 5 : 12 });
+    }
+  }
+  function updateVortex(dt) {
+    const v = vortex; v.time += dt; v.cooldown = Math.max(0, v.cooldown-dt);
+    v.pulse *= Math.exp(-dt * 5); v.hue += (v.targetHue-v.hue) * (1-Math.exp(-dt/2));
+    v.targetHue += dt * 2;
+    const count = demo ? 358 : Math.min(v.previous.length, Math.floor(bins.length * .7));
+    let sum = 0, bass = 0, bassCount = 0;
+    for (let i=0; i<count; i++) {
+      const value = demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
+      sum += value;
+      const hz = demo ? i * 48000/4096 : i * audio.sampleRate/analyser.fftSize;
+      if (hz >= 20 && hz <= 150) { bass += value; bassCount++; }
+    }
+    const mean = sum/Math.max(1,count);
+    v.levels.push({ value: mean, dt });
+    let duration = v.levels.reduce((a,b)=>a+b.dt,0);
+    while (duration > 3 && v.levels.length > 1) duration -= v.levels.shift().dt;
+    v.average = v.levels.reduce((a,b)=>a+b.value*b.dt,0)/Math.max(.001,duration);
+    const gain = clamp(.18/Math.max(.015,v.average),.35,6);
+    bass /= Math.max(1,bassCount);
+    if (rhythm.beat && rhythm.tracking) triggerVortexBeat(rhythm.beatInBar === 0);
+    else if (!rhythm.tracking && bass > Math.max(.035,v.bass*1.45)) triggerVortexBeat();
+    v.bass += (bass-v.bass)*(1-Math.exp(-dt/1.5));
+    // Rotate the scan start so a dense attack cannot starve high frequencies.
+    const start = Math.floor(v.time*997)%Math.max(1,count);
+    let emitted = 0;
+    for (let n=0;n<count;n++) {
+      const offset = n % 2 ? Math.ceil(count/2) + Math.floor(n/2) : Math.floor(n/2);
+      const i=(start+offset)%count;
+      const value=demo ? rawEnergies[Math.floor(i/count*N)] : bins[i]/255;
+      const attack=Math.max(0,value-v.previous[i])*gain;
+      v.previous[i]=value;
+      if (attack>.065 && emitted<Math.ceil(1800*dt)) {
+        emitVortex(i/Math.max(1,count-1),clamp(value*gain,0,1),Math.min(1,attack)); emitted++;
+      }
+    }
+    v.idle += dt;
+    if (mean < .015 && v.idle > .12) { emitVortex(Math.random(),.08,.02,true); v.idle=0; }
+    // Small substeps keep the force field stable at low frame rates.
+    const steps=Math.ceil(dt*120), step=dt/steps, scale=Math.min(width,height)/700;
+    for (const p of v.particles) {
+      p.px=p.x; p.py=p.y; p.age+=dt;
+      for(let j=0;j<steps;j++) {
+        const d=Math.max(1,Math.hypot(p.x,p.y)), nx=-p.x/d, ny=-p.y/d;
+        const gravity=(230/p.mass)*(1-v.pulse*1.8)*scale;
+        // Tangential force tapers near the core to allow eventual absorption.
+        const swirl=65*v.direction*(1+v.pulse*3)*Math.min(1,d/100)*scale;
+        const drag=Math.pow(.97,step*60);
+        p.vx=(p.vx+(nx*gravity-ny*swirl)*step)*drag;
+        p.vy=(p.vy+(ny*gravity+nx*swirl)*step)*drag;
+        p.x+=p.vx*step; p.y+=p.vy*step;
+      }
+    }
+    v.particles=v.particles.filter(p=>p.age<p.life && !(p.age>.65 && Math.hypot(p.x,p.y)<12));
+  }
+  function drawVortex() {
+    const v=vortex;
+    ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+    ctx.fillStyle=v.fresh ? '#000000' : `rgba(0,0,0,${1-Math.pow(.92,Math.max(.25,v.renderDt || 1))})`;
+    ctx.fillRect(0,0,width,height); v.fresh=false;
+    ctx.save(); ctx.translate(width/2,height/2);
+    const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if(!reduced) { ctx.rotate(Math.sin(v.time*.08)*.035); ctx.scale(1+v.pulse*.03,1+v.pulse*.03); }
+    ctx.globalCompositeOperation='lighter'; ctx.lineCap='round';
+    for(const p of v.particles) {
+      const d=Math.hypot(p.x,p.y), speed=Math.hypot(p.vx,p.vy);
+      const r=Math.max(.25,p.radius*clamp(d/100,.08,1));
+      const alpha=clamp(d/25,0,1)*Math.min(1,(p.life-p.age)/.8);
+      const hue=(v.hue+p.f*120)%360;
+      const light=55+40*Math.max(Math.exp(-p.age*8),clamp(speed/500,0,1));
+      if(r>3) { ctx.fillStyle=`hsla(${hue},95%,60%,${alpha*.12})`; ctx.beginPath(); ctx.arc(p.x,p.y,r*2.2,0,Math.PI*2); ctx.fill(); }
+      ctx.strokeStyle=`hsla(${hue},95%,${light}%,${alpha*.85})`; ctx.lineWidth=r*2;
+      ctx.beginPath(); ctx.moveTo(p.px,p.py); ctx.lineTo(p.x,p.y); ctx.stroke();
+    }
+    const radius=12+Math.min(.5,v.average)*12+v.pulse*8;
+    for(let i=3;i>0;i--) {
+      ctx.strokeStyle=`hsla(${v.hue%360},95%,65%,${.12/i+v.pulse*.08})`;
+      ctx.lineWidth=i*3; ctx.beginPath(); ctx.arc(0,0,radius+i*2,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.globalCompositeOperation='source-over'; ctx.fillStyle='#000000';
+    ctx.beginPath(); ctx.arc(0,0,radius*.72,0,Math.PI*2); ctx.fill(); ctx.restore();
+  }
   function frame(now) {
     if (!running || document.hidden) return;
     if (!previous) renderTiming.reset();
@@ -1460,17 +1575,19 @@
     laneAnimations = [];
     laneCanvas.width = canvas.width; laneCanvas.height = canvas.height;
     laneCanvas.getContext('2d').drawImage(canvas, 0, 0);
-    mode = mode === 'flocks' ? 'stars' : 'flocks';
+    const modes = ['flocks', 'stars', 'vortex'];
+    const titles = ['光の群れ', '星空', 'アリジゴク・ヴォルテックス'];
+    const index = (modes.indexOf(mode) + direction + modes.length) % modes.length;
+    mode = modes[index];
     resetSignals(); densityPressure = 0; visibleDensity = 0;
-    const isFlocks = mode === 'flocks';
-    const title = isFlocks ? '光の群れ' : '星空';
-    document.querySelector('#theme-title').textContent = title;
-    document.querySelector('#theme-description').textContent = isFlocks ? '音の流れを、光の翼に。' : '音の余韻を、夜空のきらめきに。';
-    document.querySelector('#theme-number').textContent = isFlocks ? '01 / 02' : '02 / 02';
-    document.querySelector('#intro-title').textContent = isFlocks ? '音を、光の動きに。' : '音を、星空に。';
-    canvas.setAttribute('aria-label', isFlocks ? '周波数とリズムに合わせて動く光の球の群れ' : '音に反応して瞬く星空');
-    document.querySelector('#previous-mode').setAttribute('aria-label', `前のアニメーション：${isFlocks ? '星空' : '光の群れ'}`);
-    document.querySelector('#next-mode').setAttribute('aria-label', `次のアニメーション：${isFlocks ? '星空' : '光の群れ'}`);
+    ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = '#000000'; ctx.fillRect(0,0,width,height);
+    document.querySelector('#theme-title').textContent = titles[index];
+    document.querySelector('#theme-description').textContent = ['音の流れを、光の翼に。', '音の余韻を、夜空のきらめきに。', '音の光が、銀河の渦へ。'][index];
+    document.querySelector('#theme-number').textContent = `0${index+1} / 03`;
+    document.querySelector('#intro-title').textContent = ['音を、光の動きに。', '音を、星空に。', '音を、銀河の渦に。'][index];
+    canvas.setAttribute('aria-label', ['周波数とリズムに合わせて動く光の球の群れ', '音に反応して瞬く星空', '音で放射された光が螺旋を描いて中心へ吸い込まれる渦'][index]);
+    document.querySelector('#previous-mode').setAttribute('aria-label', `前のアニメーション：${titles[(index+2)%3]}`);
+    document.querySelector('#next-mode').setAttribute('aria-label', `次のアニメーション：${titles[(index+1)%3]}`);
     draw();
     if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches && canvas.animate) {
       const timing = { duration: 460, easing: 'cubic-bezier(.22,.7,.25,1)' };

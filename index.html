@@ -8,14 +8,14 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/192x192.png" type="image/png">
   <link rel="apple-touch-icon" href="./icons/192x192.png">
-  <link rel="stylesheet" href="./style.css?v=2026.10.19.35">
+  <link rel="stylesheet" href="./style.css?v=2026.10.19.36">
   <title>Starlight Bell</title>
-  <script src="./model-setup.js?v=2026.10.19.35" defer></script>
-  <script src="./beat-this-audio.js?v=2026.10.19.35" defer></script>
-  <script src="./beat-clock.js?v=2026.10.19.35" defer></script>
-  <script src="./beat-this-client.js?v=2026.10.19.35" defer></script>
-  <script src="./dance-motion.js?v=2026.10.19.35" defer></script>
-  <script src="./app.js?v=2026.10.19.35" defer></script>
+  <script src="./model-setup.js?v=2026.10.19.36" defer></script>
+  <script src="./beat-this-audio.js?v=2026.10.19.36" defer></script>
+  <script src="./beat-clock.js?v=2026.10.19.36" defer></script>
+  <script src="./beat-this-client.js?v=2026.10.19.36" defer></script>
+  <script src="./dance-motion.js?v=2026.10.19.36" defer></script>
+  <script src="./app.js?v=2026.10.19.36" defer></script>
 </head>
 <body>
   <section id="model-setup" aria-labelledby="setup-title" aria-busy="true">
@@ -35,7 +35,7 @@
   <main id="sky" aria-label="音に反応する光のアニメーション">
     <canvas id="canvas" aria-label="周波数とリズムに合わせて動く光の球の群れ"></canvas>
     <canvas id="lane-transition" aria-hidden="true"></canvas>
-    <div id="theme" role="status" aria-live="polite" aria-atomic="true"><span id="theme-number">01 / 02</span><strong id="theme-title">光の群れ</strong><span id="theme-description">音の流れを、光の翼に。</span></div>
+    <div id="theme" role="status" aria-live="polite" aria-atomic="true"><span id="theme-number">01 / 03</span><strong id="theme-title">光の群れ</strong><span id="theme-description">音の流れを、光の翼に。</span></div>
     <p id="version" aria-label="アプリのバージョン">読み込み中…</p>
     <details id="audio-debug" open>
       <summary>音の認識 · DEBUG</summary>
@@ -77,7 +77,7 @@
     <button id="close-microphone-dialog" type="button">閉じる</button>
   </dialog>
   <footer aria-label="観測の操作">
-    <button id="previous-mode" class="mode-arrow" type="button" aria-label="前のアニメーション：星空"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
+    <button id="previous-mode" class="mode-arrow" type="button" aria-label="前のアニメーション：アリジゴク・ヴォルテックス"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
     <button id="start" type="button" disabled>開始</button>
     <button id="stop" type="button" disabled>終了</button>
     <button id="next-mode" class="mode-arrow" type="button" aria-label="次のアニメーション：星空"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg></button>
